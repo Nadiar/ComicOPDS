@@ -70,4 +70,4 @@ In the `config.py` file you need to change like 4 from `"/library"` to your comi
 
 # Notes
 
-5865 files in 274 seconds
+5865 files in 359 seconds

@@ -8,6 +8,14 @@ The easiest way to get started is to clone the git reposetory, build the docker 
 
 Alternativly you can clone the repo and start the flask server using the main file. This requires a bit of configuration.
 
+### Prerequisites
+
+- **All comic files needs to be cbz.**
+  This doens't work with cbr. I see no reason to use cbr and as such, this project wont support it.
+
+- **All comics must be properly tagged.** 
+  This means every cbz file must contain a `ComicInfo.xml` file. You can use various tools to  
+
 ### Docker
 
 #### Prerequisites

@@ -128,13 +128,52 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 for e in data:
                     for key, value in e.items():
                         print(key)
-                        query="SELECT * FROM COMICS where "
-                
+                        if key == i:
+                            query="SELECT * FROM COMICS where "
+                            for i in value:
+                                first=True
+                                for j,k in i.items():
+                                    if j == 'SQL':
+                                        query = query + k
+                                    if k != '' and j != "SQL":
+                     #                   print(j,k)
+                                        if not first:
+                                            query = query + "and "
+                                        if type(k) == list:
+                     #                       print(k)
+                                            if j == "series" or j == "title":
+                                                firstS = True
+                                                query = query + "("
+                                                for l in k:
+                                                    if not firstS:
+                                                        query = query + "or "
+                                                    query = query + j + " like '%" + l + "%' "
+                                                    if firstS: 
+                                                        firstS = False
+                                                query = query + ") "
+                                            else:
+                                                query = query + j + " in (" 
+                                                firstL = True
+                                                for l in k:
+                                                    if not firstL: 
+                                                        query = query + ","
+                                                    query = query + "'" + l + "'"
+                                                    if firstL:
+                                                        firstL = False
+                                                query = query + ") "
 
-                sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
+                                        else:
+                                            query = query + j + " like '%" + k + "%' "
+                                        if first:
+                                            first = False
+                            query = query + ";"
+                            print("----> " + query)
+                                
+                sql = query
+                #sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
                 print(sql)
                 s = conn.execute(sql)
-                list=[] 
+                #list=[] 
                 for r in s:
                     #print(r)
                     tUrl=f""+r[7].replace("/home/drudoo/ComicsTest/Comics/","/content/")

@@ -1,5 +1,11 @@
 [
     {
+        "SQL TEST": [
+            {
+                "SQL": "(series like '%Aqua%' or series like '%girl%') and issue in ('1','2','5','10') and title not like '%Annual%'"
+            }
+        ]
+    },{
         "Man 2020,2019": [
             {
                 "title": "Man",
@@ -14,6 +20,16 @@
         ]
     },
     {
+        "DC (BAT)": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "DC Comics",
+                "series": "Bat",
+                "issue": ""
+            }
+        ]
+    },{
         "Marvel": [
             {
                 "title": "",

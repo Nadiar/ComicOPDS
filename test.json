@@ -14,9 +14,20 @@
         ]
     },
     {
+        "Marvel": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "marvel",
+                "series": "",
+                "issue": ""
+            }
+        ]
+    },
+    {
         "Girl": [
             {
-                "title": "girl",
+                "title": ["girl","man","World"],
                 "volume": "",
                 "publisher": "",
                 "series": "girl",

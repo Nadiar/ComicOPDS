@@ -7,5 +7,5 @@ services:
     ports:
       - '5000:5000'
     volumes:
-      - '/opt/data/Comics/ComicRack:/library:ro'
+      - '/opt/data/Comics/ComicRack/Oni Press:/library:ro'
       - '${PWD}/:/app'

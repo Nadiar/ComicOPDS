@@ -37,7 +37,7 @@ def healthz():
 
 @app.route('/import')
 def import2sql():
-    conn = sqlite3.connect('/app/app.db')
+    conn = sqlite3.connect('app.db')
     list = []
 
     start_time = timeit.default_timer()
@@ -45,7 +45,6 @@ def import2sql():
         for file in files:
             f = os.path.join(root, file)
             #try:
-            print(f,file=sys.stdout)
             try:
                 s = zipfile.ZipFile(f)
                 #s = gzip.GzipFile(f)
@@ -60,13 +59,17 @@ def import2sql():
                 SERIES=Bs_data.select('Series')[0].text
                 VOLUME=Bs_data.select('Volume')[0].text
                 PUBLISHER=Bs_data.select('Publisher')[0].text
-                TITLE=Bs_data.select('Title')[0].text
+                try:
+                    TITLE=Bs_data.select('Title')[0].text
+                except:
+                    TITLE="" #sometimes title is blank.
                 PATH=f 
                 UPDATED=str(datetime.datetime.now())
                 #print(UPDATED,file=sys.stdout)
-                sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB[0]+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
+                #sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB[0]+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
                 #print(sql,file=sys.stdout)
-                conn.execute(sql);
+                #conn.execute(sql);
+                conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB[0], ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
                 conn.commit()
             except:
                 print(f,file=sys.stdout)

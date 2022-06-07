@@ -1,8 +1,8 @@
 import os
 from werkzeug.security import generate_password_hash
 
-CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library")
-#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics")
+#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library")
+CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics")
 
 TEENYOPDS_ADMIN_PASSWORD = os.getenv("TEENYOPDS_ADMIN_PASSWORD", None)
 users = {}

@@ -38,6 +38,7 @@ def import2sql():
     conn = sqlite3.connect('app.db')
     list = []
 
+    start_time = timeit.default_timer()
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
             f = os.path.join(root, file)
@@ -63,7 +64,10 @@ def import2sql():
             conn.commit()
     
     conn.close()
-    return "yay"
+    elapsed = timeit.default_timer() - start_time
+    print(elapsed)
+
+    return str(elapsed)
 
 @app.route("/content/<path:path>")
 @auth.login_required

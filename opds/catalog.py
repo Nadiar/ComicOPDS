@@ -48,6 +48,7 @@ def fromsearch(root_url, url, content_base_path, content_relative_path):
 
 def fromdir(root_url, url, content_base_path, content_relative_path):
     
+    searchArr=["Girl","Bat","Part One"]
     path = os.path.join(content_base_path, content_relative_path)
     #print(path)
     c = Catalog(
@@ -70,13 +71,16 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
 
     
     if c.url.endswith("/catalog"):
-        link2 = Link(
-            href=quote(f"/catalog/search"),
-            rel="subsection",
-            rpath=path,
-            type="application/atom+xml;profile=opds-catalog;kind=acquisition",
-        )
-        c.add_entry(Entry(title="Search",id=uuid4(),links=[link2]))
+        
+        for i in searchArr:
+
+            link2 = Link(
+                href=quote(f"/catalog/search["+i+"]"),
+                rel="subsection",
+                rpath=path,
+                type="application/atom+xml;profile=opds-catalog;kind=acquisition",
+            )
+            c.add_entry(Entry(title="Search["+i+"]",id=uuid4(),links=[link2]))
 
     if not "search" in c.url:
         onlyfiles = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
@@ -92,30 +96,34 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
             #fixed issue with multiple . in filename
             #print(c.render()) 
     else:
-        search="Man"
-        conn = sqlite3.connect('app.db')
-        sql="SELECT * from COMICS where SERIES like '%" + search+ "%' or Title like '%" + search+ "%';"
-    
-        s = conn.execute(sql)
-        list=[] 
-        for r in s:
-            #print(r)
-            tUrl=f""+r[7].replace("/home/drudoo/ComicsTest/Comics/","/content/")
-            tTitle=r[6]
-            link3 = Link(
-                #href=quote(f"/content/DC Comics/Earth Cities/Gotham City/Batgirl/Annual/(2012) Batgirl Annual/Batgirl Annual #001 - The Blood That Moves Us [December, 2012].cbz"),
-                href=quote(tUrl),
-                rel="http://opds-spec.org/acquisition",
-                rpath=path,
-                type="application/x-cbz",
-            )
-            c.add_entry(
-                Entry(
-                    title=tTitle,
-                    id=uuid4(),
-                    links=[link3]
+        print(searchArr) 
+        for i in searchArr:
+            if quote(f""+i) in c.url:
+                print(i)
+                conn = sqlite3.connect('app.db')
+
+                sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
+                print(sql)
+                s = conn.execute(sql)
+                list=[] 
+                for r in s:
+                    #print(r)
+                    tUrl=f""+r[7].replace("/home/drudoo/ComicsTest/Comics/","/content/")
+                    tTitle=r[6]
+                    link3 = Link(
+                        #href=quote(f"/content/DC Comics/Earth Cities/Gotham City/Batgirl/Annual/(2012) Batgirl Annual/Batgirl Annual #001 - The Blood That Moves Us [December, 2012].cbz"),
+                        href=quote(tUrl),
+                        rel="http://opds-spec.org/acquisition",
+                        rpath=path,
+                        type="application/x-cbz",
                     )
-                )
+                    c.add_entry(
+                        Entry(
+                            title=tTitle,
+                            id=uuid4(),
+                            links=[link3]
+                            )
+                        )
 
 
     return c

@@ -1,0 +1,50 @@
+[
+    {
+        "Man 2020,2019": [
+            {
+                "title": "Man",
+                "volume": [
+                    "2020",
+                    "2019"
+                ],
+                "publisher": "",
+                "series": "",
+                "issue": ""
+            }
+        ]
+    },
+    {
+        "Girl": [
+            {
+                "title": "girl",
+                "volume": "",
+                "publisher": "",
+                "series": "girl",
+                "issue": ""
+            }
+        ]
+    },
+    {
+        "Aquaman": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "",
+                "series": "aquaman",
+                "issue": ["2","3","5","10","22"]
+            }
+        ]
+    }
+,
+    {
+        "Girl series": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "",
+                "series": "girl",
+                "issue": "2"
+            }
+        ]
+    }
+]

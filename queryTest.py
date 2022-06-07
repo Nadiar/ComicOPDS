@@ -7,12 +7,14 @@ with open('test.json') as f:
 for element in data:
     for key, value in element.items():
         title=key
-#        print("Search Title: " + title)
         query="SELECT * FROM COMICS where "
+#        print("Search Title: " + title)
         for i in value:
             first=True
             for j,k in i.items():
-                if k != '':
+                if j == 'SQL':
+                    query = query + k
+                if k != '' and j != "SQL":
  #                   print(j,k)
                     if not first:
                         query = query + "and "

@@ -4,7 +4,7 @@ from urllib.parse import quote
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .entry import Entry
 from .link import Link
-import sqlite3
+import sqlite3,json
 
 
 class Catalog(object):
@@ -47,14 +47,31 @@ def fromsearch(root_url, url, content_base_path, content_relative_path):
     return c
 
 def fromdir(root_url, url, content_base_path, content_relative_path):
-    
-    searchArr=["Girl","Bat","Part One"]
+
+
     path = os.path.join(content_base_path, content_relative_path)
+
     #print(path)
     c = Catalog(
         title=os.path.basename(os.path.dirname(path)), root_url=root_url, url=url
     )
     #print(c.url)
+
+    ##########WORKING AREA###########
+    searchArr=[]
+    if c.url.endswith("/catalog"):
+        with open('test.json') as fi:
+            data=json.load(fi)
+            print("--> LOADED FILE") # try and get this as low as possible.
+    #searchArr=["Girl","Bat","Part One"]
+    
+            for e in data:
+                for key, value in e.items():
+                    searchArr.append(key)
+    print(searchArr) 
+    ######################
+
+
     if not "search" in c.url:
         onlydirs = [
             f for f in os.listdir(path) if not os.path.isfile(os.path.join(path, f))
@@ -96,11 +113,23 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
             #fixed issue with multiple . in filename
             #print(c.render()) 
     else:
-        print(searchArr) 
+        with open('test.json') as fi:
+            data=json.load(fi)
+            print("--> LOADED 2 FILE") # try and get this as low as possible.
+        for e in data:
+            for key, value in e.items():
+                print(key)
+                searchArr.append(key)
         for i in searchArr:
+            print(i)
             if quote(f""+i) in c.url:
-                print(i)
                 conn = sqlite3.connect('app.db')
+                print(data)
+                for e in data:
+                    for key, value in e.items():
+                        print(key)
+                        query="SELECT * FROM COMICS where "
+                
 
                 sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
                 print(sql)

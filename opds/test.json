@@ -1,0 +1,67 @@
+[
+    {
+        "SQL TEST": [
+            {
+                "SQL": "(series like '%Aqua%' or series like '%girl%') and issue in ('1','2','5','10') and title not like '%Annual%'"
+            }
+        ]
+    },{
+        "Man 2020,2019": [
+            {
+                "title": "Man",
+                "volume": [
+                    "2020",
+                    "2019"
+                ],
+                "publisher": "",
+                "series": "",
+                "issue": ""
+            }
+        ]
+    },
+    {
+        "Marvel": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "marvel",
+                "series": "",
+                "issue": ""
+            }
+        ]
+    },
+    {
+        "Girl": [
+            {
+                "title": ["girl","man","World"],
+                "volume": "",
+                "publisher": "",
+                "series": "girl",
+                "issue": ""
+            }
+        ]
+    },
+    {
+        "Aquaman": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "",
+                "series": "aquaman",
+                "issue": ["2","3","5","10","22"]
+            }
+        ]
+    }
+,
+    {
+        "Girl series": [
+            {
+                "title": "",
+                "volume": "",
+                "publisher": "",
+                "series": "girl",
+                "issue": "2"
+            }
+        ]
+    }
+]

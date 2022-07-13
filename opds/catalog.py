@@ -51,11 +51,19 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
 
     path = os.path.join(content_base_path, content_relative_path)
 
-    #print(path)
-    c = Catalog(
-        title=os.path.basename(os.path.dirname(path)), root_url=root_url, url=url
-    )
-    #print(c.url)
+    if os.path.basename(content_relative_path) == "":
+        c = Catalog(
+            title="Comics",
+            root_url=root_url,
+            url=url
+            )
+    else:
+        c = Catalog(
+            title=os.path.basename(content_relative_path), 
+            root_url=root_url, 
+            url=url
+        )
+    #title=os.path.basename(os.path.dirname(path)), root_url=root_url, url=url
 
     ##########WORKING AREA###########
     searchArr=[]

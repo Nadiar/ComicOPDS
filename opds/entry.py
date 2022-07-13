@@ -60,10 +60,14 @@ class Entry(object):
             #print(kwargs["links"][0].get("rpath"))
                 if data.select('Series')[0].text in kwargs["links"][0].get("rpath"):
                     releasedate=data.select('Year')[0].text+"-"+data.select('Month')[0].text.zfill(2)+"-"+data.select('Day')[0].text.zfill(2)
-                    self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ")"
+                    try:
+                        self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ")"
+                    except:
+                        self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ")"
             #print(self.title)
                 else:
                     self.title = kwargs["title"]
+
             else:
                 self.title = kwargs["title"]
             #self.title = data.select('Title')[0].text

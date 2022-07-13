@@ -101,7 +101,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
 
     if not "search" in c.url:
         onlyfiles = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
-        #print(onlyfiles)
+        onlyfiles.sort()
         for filename in onlyfiles:
             link = Link(
                 href=quote(f"/content/{content_relative_path}/{filename}"),
@@ -166,7 +166,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                                             query = query + j + " like '%" + k + "%' "
                                         if first:
                                             first = False
-                            query = query + ";"
+                            query = query + " order by series asc, cast(issue as unsigned) asc;"
                             print("----> " + query)
                                 
                 sql = query

@@ -62,13 +62,25 @@
         ]
     },
     {
-        "Aquaman": [
+        "number 1": [
             {
                 "title": "",
                 "volume": "",
                 "publisher": "",
-                "series": "aquaman",
-                "issue": ["2","3","5","10","22"]
+                "series": "",
+                "issue": ["1"]
+            }
+        ]
+    }
+,
+    {
+        "Aquaman": [
+            {
+                "title": ["Tyrant King", "The Deluge Act Three", "Warhead Part One"],
+                "volume": "",
+                "publisher": "",
+                "series": "",
+                "issue": ""
             }
         ]
     }

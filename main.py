@@ -1,4 +1,4 @@
-from flask import Flask, send_from_directory, request
+from flask import Flask, render_template, send_from_directory, request
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import check_password_hash
 from gevent.pywsgi import WSGIServer
@@ -31,6 +31,14 @@ def verify_password(username, password):
 
 
 @app.route("/")
+def startpage():
+    conn = sqlite3.connect('app.db')
+    cursor = conn.cursor()
+    cursor.execute("select * from comics;")
+    result = cursor.fetchall()
+    conn.close()
+    return render_template("start.html", result=result)
+
 @app.route("/healthz")
 def healthz():
     return "ok"
@@ -90,11 +98,12 @@ def send_content(path):
 @app.route("/catalog/<path:path>")
 @auth.login_required
 def catalog(path=""):
+    #print("PRESSED ON")
     start_time = timeit.default_timer()
-    print(request.root_url) 
+    #print(request.root_url) 
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
     elapsed = timeit.default_timer() - start_time
-    print(elapsed)
+    #print("RENDERED IN: " + str(elapsed))
     
     return c.render()
 

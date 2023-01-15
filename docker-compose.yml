@@ -1,11 +1,12 @@
 version: '3.3'
 services:
   comicopds:
-    image: comicopds
+    image: .
     container_name: comicopds
     restart: unless-stopped
     ports:
       - '5000:5000'
     volumes:
-      - '/opt/data/Comics/ComicRack:/library:ro'
+      #- '/opt/data/Comics/ComicRack:/library:ro'
+      - '~/ComicsTest/Comics:/library:ro'
       - '${PWD}/:/app'

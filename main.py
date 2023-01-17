@@ -19,7 +19,6 @@ import config
 app = Flask(__name__, static_url_path="", static_folder="static")
 auth = HTTPBasicAuth()
 
-
 @auth.verify_password
 def verify_password(username, password):
     if not config.TEENYOPDS_ADMIN_PASSWORD:
@@ -47,6 +46,10 @@ def healthz():
 def import2sql():
     conn = sqlite3.connect('app.db')
     list = []
+    comiccount = 0
+    importcount = 0
+    skippedcount = 0
+    errorcount = 0
 
     start_time = timeit.default_timer()
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
@@ -55,7 +58,9 @@ def import2sql():
             #try:
             if f.endswith('.cbz'):
                 try:
+                    comiccount = comiccount + 1
                     s = zipfile.ZipFile(f)
+                    filemodtime = os.path.getmtime(f)
                     #s = gzip.GzipFile(f)
                     Bs_data = BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
                     #print(Bs_data.select('Series')[0].text, file=sys.stderr)
@@ -73,25 +78,43 @@ def import2sql():
                     except:
                         TITLE="" #sometimes title is blank.
                     PATH=f 
-                    UPDATED=str(datetime.datetime.now())
+                    UPDATED=filemodtime
                     #print(UPDATED,file=sys.stdout)
                     #sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB[0]+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
                     #print(sql,file=sys.stdout)
                     #conn.execute(sql);
-                    conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB[0], ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
-                    conn.commit()
+                    query = "SELECT UPDATED FROM COMICS WHERE CVDB = '" + str(CVDB[0]) + "';"
+                    savedmodtime = conn.execute(query).fetchone()[0]
+                    #print(savedmodtime)
+                    #print(float(savedmodtime))
+                    #print(type(savedmodtime))
+                    #print(type(filemodtime))
+                    if savedmodtime < filemodtime:
+                        #print(str(savedmodtime) + " is less than " + str(filemodtime))
+                        
+                        print(str(CVDB[0]) + " - s: " + str(savedmodtime))
+                        print(str(CVDB[0]) + " - f: " + str(filemodtime))
+                        conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB[0], ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
+                        conn.commit()
+                        print("Adding: " + str(CVDB[0]))
+                        importcount = importcount + 1
+                    else:
+                    #    print("Skipping: " + str(CVDB[0]))
+                        skippedcount = skippedcount + 1
                 except:
+                    errorcount = errorcount + 1
                     print(f,file=sys.stdout)
     
     conn.close()
     elapsed = timeit.default_timer() - start_time
-    print(elapsed)
-
-    return str(elapsed)
+    elapsed_time = "IMPORTED IN: " + str(round(elapsed,2)) + "s"
+    print(elapsed_time)
+    return elapsed_time + "<br>Comics: " + str(comiccount) + "<br>Imported: " + str(importcount) + "<br>Skipped: " + str(skippedcount) + "<br>Errors: " + str(errorcount)  
 
 @app.route("/content/<path:path>")
 @auth.login_required
 def send_content(path):
+    print('content')
     return send_from_directory(config.CONTENT_BASE_DIR, path)
 
 @app.route("/catalog")
@@ -103,7 +126,7 @@ def catalog(path=""):
     #print(request.root_url) 
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
     elapsed = timeit.default_timer() - start_time
-    #print("RENDERED IN: " + str(elapsed))
+    print("RENDERED IN: " + str(round(elapsed,2))+"s")
     
     return c.render()
 

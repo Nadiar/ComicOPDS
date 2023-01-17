@@ -126,16 +126,16 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
             print("--> LOADED 2 FILE") # try and get this as low as possible.
         for e in data:
             for key, value in e.items():
-                print(key)
+                #print(key)
                 searchArr.append(key)
         for i in searchArr:
-            print(i)
+            #print(i)
             if quote(f""+i) in c.url:
                 conn = sqlite3.connect('app.db')
-                print(data)
+                #print(data)
                 for e in data:
                     for key, value in e.items():
-                        print(key)
+                        #print(key)
                         if key == i:
                             query="SELECT * FROM COMICS where "
                             for i in value:
@@ -179,7 +179,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                                 
                 sql = query
                 #sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
-                print(sql)
+                #print(sql)
                 s = conn.execute(sql)
                 #list=[] 
                 for r in s:
@@ -200,9 +200,9 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                             links=[link3]
                             )
                         )
-
-
+    #print(c.title)
     return c
+
 
 
 

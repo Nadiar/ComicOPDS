@@ -27,6 +27,12 @@
   <entry>
     <title>{{ entry.title }}</title>
     <id>{{ entry.id }}</id>
+    {% for author in entry.authors %}
+    <author>
+      <name>{{ author }}</name>
+      <uri></uri>
+    </author>
+    {% endfor %}
     {% if entry.updated %} <updated>{{ entry.updated }}</updated> {% endif %}
     {% for link in entry.links %}
     <link rel="{{ link.rel }}"

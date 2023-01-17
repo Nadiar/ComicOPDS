@@ -2,6 +2,8 @@ import zipfile
 from bs4 import BeautifulSoup
 import os
 
+from extras import get_size
+
 class Entry(object):
     valid_keys = (
         "id",
@@ -23,7 +25,10 @@ class Entry(object):
         "oai_updatedates",
         "authors",
         "formats",
+        "size",
         "links",
+        "cover",
+        "covertype"
     )
 
     required_keys = ("id", "title", "links")
@@ -53,7 +58,11 @@ class Entry(object):
             f=self.links[0].get("rpath")+"/"+self.title+".cbz"
             if os.path.exists(f): 
                 s = zipfile.ZipFile(f)
+                self.size = get_size(f, 'mb')
                 data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
+                #self.cover=s.open('P00001.jpg').read()
+                self.authors = data.select('Writer')[0].text.split(",")
+                print(self.authors)
             #print(data)
             #print(kwargs["links"][0])
             #print(data.select('Series')[0].text)
@@ -61,9 +70,9 @@ class Entry(object):
                 if data.select('Series')[0].text in kwargs["links"][0].get("rpath"):
                     releasedate=data.select('Year')[0].text+"-"+data.select('Month')[0].text.zfill(2)+"-"+data.select('Day')[0].text.zfill(2)
                     try:
-                        self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ")"
+                        self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ") [" + str(self.size) + "MB]"
                     except:
-                        self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ")"
+                        self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ") [" + str(self.size) + "MB]"
             #print(self.title)
                 else:
                     self.title = kwargs["title"]
@@ -71,8 +80,6 @@ class Entry(object):
             else:
                 self.title = kwargs["title"]
             #self.title = data.select('Title')[0].text
-            
-
     def get(self, key):
         return self._data.get(key, None)
 

@@ -31,6 +31,7 @@ def verify_password(username, password):
 
 @app.route("/")
 def startpage():
+    #result = "Hello, World!"
     conn = sqlite3.connect('app.db')
     cursor = conn.cursor()
     cursor.execute("select * from comics;")
@@ -50,7 +51,7 @@ def import2sql():
     importcount = 0
     skippedcount = 0
     errorcount = 0
-
+    comics_with_errors = []
     start_time = timeit.default_timer()
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
@@ -83,8 +84,14 @@ def import2sql():
                     #sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB[0]+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
                     #print(sql,file=sys.stdout)
                     #conn.execute(sql);
-                    query = "SELECT UPDATED FROM COMICS WHERE CVDB = '" + str(CVDB[0]) + "';"
-                    savedmodtime = conn.execute(query).fetchone()[0]
+                    
+                    # CREATE TABLE IF MISSING
+                    # create table COMICS (CVDB, ISSUE, SERIES,VOLUME,PUBLISHER,TITLE,FILE,PATH,UPDATED,PRIMARY KEY(CVDB))
+                    try:
+                        query = "SELECT UPDATED FROM COMICS WHERE CVDB = '" + str(CVDB[0]) + "';"
+                        savedmodtime = conn.execute(query).fetchone()[0]
+                    except:
+                        savedmodtime = 0
                     #print(savedmodtime)
                     #print(float(savedmodtime))
                     #print(type(savedmodtime))
@@ -92,24 +99,25 @@ def import2sql():
                     if savedmodtime < filemodtime:
                         #print(str(savedmodtime) + " is less than " + str(filemodtime))
                         
-                        print(str(CVDB[0]) + " - s: " + str(savedmodtime))
-                        print(str(CVDB[0]) + " - f: " + str(filemodtime))
+                        #print(str(CVDB[0]) + " - s: " + str(savedmodtime))
+                        #print(str(CVDB[0]) + " - f: " + str(filemodtime))
                         conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB[0], ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
                         conn.commit()
-                        print("Adding: " + str(CVDB[0]))
+                        #print("Adding: " + str(CVDB[0]))
                         importcount = importcount + 1
                     else:
                     #    print("Skipping: " + str(CVDB[0]))
                         skippedcount = skippedcount + 1
                 except:
                     errorcount = errorcount + 1
-                    print(f,file=sys.stdout)
+                    comics_with_errors.append(f)
+                    #print(f,file=sys.stdout)
     
     conn.close()
     elapsed = timeit.default_timer() - start_time
     elapsed_time = "IMPORTED IN: " + str(round(elapsed,2)) + "s"
-    print(elapsed_time)
-    return elapsed_time + "<br>Comics: " + str(comiccount) + "<br>Imported: " + str(importcount) + "<br>Skipped: " + str(skippedcount) + "<br>Errors: " + str(errorcount)  
+    import_stats = elapsed_time + "<br>Comics: " + str(comiccount) + "<br>Imported: " + str(importcount) + "<br>Skipped: " + str(skippedcount) + "<br>Errors: " + str(errorcount)
+    return import_stats #+ "<br>" + ['<li>' + x + '</li>' for x in comics_with_errors]
 
 @app.route("/content/<path:path>")
 @auth.login_required
@@ -118,6 +126,7 @@ def send_content(path):
     return send_from_directory(config.CONTENT_BASE_DIR, path)
 
 @app.route("/catalog")
+@app.route("/catalog/")
 @app.route("/catalog/<path:path>")
 @auth.login_required
 def catalog(path=""):

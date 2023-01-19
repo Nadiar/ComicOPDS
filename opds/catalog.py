@@ -5,7 +5,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from .entry import Entry
 from .link import Link
 import sqlite3,json
-
+import config
 
 class Catalog(object):
     def __init__(
@@ -79,6 +79,8 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
     print(searchArr) 
     ######################
 
+    
+    
 
     if not "search" in c.url:
         onlydirs = [
@@ -87,7 +89,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
     #print(onlydirs)
         for dirname in onlydirs:
             link = Link(
-                href=quote(f"/catalog/{content_relative_path}/{dirname}"),
+                href=quote(f"/catalog/{content_relative_path}/{dirname}").replace('//','/'), #windows fix
                 rel="subsection",
                 rpath=path,
                 type="application/atom+xml;profile=opds-catalog;kind=acquisition",
@@ -105,7 +107,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 rpath=path,
                 type="application/atom+xml;profile=opds-catalog;kind=acquisition",
             )
-            c.add_entry(Entry(title="Search["+i+"]",id=uuid4(),links=[link2]))
+            c.add_entry(Entry(title="["+i+"]",id=uuid4(),links=[link2]))
 
     if not "search" in c.url:
         onlyfiles = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
@@ -135,7 +137,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 #print(data)
                 for e in data:
                     for key, value in e.items():
-                        #print(key)
+                        print(key)
                         if key == i:
                             query="SELECT * FROM COMICS where "
                             for i in value:
@@ -144,11 +146,11 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                                     if j == 'SQL':
                                         query = query + k
                                     if k != '' and j != "SQL":
-                     #                   print(j,k)
+                                        print(j,k)
                                         if not first:
                                             query = query + "and "
                                         if type(k) == list:
-                     #                       print(k)
+                                            print(k)
                                             if j == "series" or j == "title":
                                                 firstS = True
                                                 query = query + "("
@@ -174,8 +176,12 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                                             query = query + j + " like '%" + k + "%' "
                                         if first:
                                             first = False
-                            query = query + " order by series asc, cast(issue as unsigned) asc;"
-                            print("----> " + query)
+                            query = query + " order by series asc, cast(issue as unsigned) asc "
+                            if config.DEFAULT_SEARCH_NUMBER != 0:
+                                query = query + "LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";"
+                            else:
+                                query = query + ";"
+                print("----> " + query)
                                 
                 sql = query
                 #sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
@@ -184,7 +190,8 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 #list=[] 
                 for r in s:
                     #print(r)
-                    tUrl=f""+r[7].replace("/home/drudoo/ComicsTest/Comics/","/content/")
+                    tUrl=f""+r[7].replace('\\','/').replace(config.WIN_DRIVE_LETTER + ':','').replace(config.CONTENT_BASE_DIR,"/content")
+                    print(tUrl)
                     tTitle=r[6]
                     link3 = Link(
                         #href=quote(f"/content/DC Comics/Earth Cities/Gotham City/Batgirl/Annual/(2012) Batgirl Annual/Batgirl Annual #001 - The Blood That Moves Us [December, 2012].cbz"),
@@ -193,6 +200,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                         rpath=path,
                         type="application/x-cbz",
                     )
+                    print(link3.href)
                     c.add_entry(
                         Entry(
                             title=tTitle,

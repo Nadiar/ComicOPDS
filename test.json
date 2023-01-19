@@ -28,14 +28,13 @@
                 "issue": ""
             }
         ]
-    },
-    {
+    },{
         "DC (BAT)": [
             {
                 "title": "",
                 "volume": "",
                 "publisher": "DC Comics",
-                "series": "Bat",
+                "series": "%bat%",
                 "issue": ""
             }
         ]
@@ -49,8 +48,7 @@
                 "issue": ""
             }
         ]
-    },
-    {
+    },{
         "Girl": [
             {
                 "title": ["girl","man","World"],
@@ -60,8 +58,7 @@
                 "issue": ""
             }
         ]
-    },
-    {
+    },{
         "number 1": [
             {
                 "title": "",

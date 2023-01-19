@@ -4,6 +4,8 @@ from werkzeug.security import generate_password_hash
 #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
 #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
 CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
+WIN_DRIVE_LETTER = 'B'
+DEFAULT_SEARCH_NUMBER = 10
 
 
 TEENYOPDS_ADMIN_PASSWORD = os.getenv("TEENYOPDS_ADMIN_PASSWORD", None)

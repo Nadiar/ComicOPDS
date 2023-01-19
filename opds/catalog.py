@@ -125,73 +125,97 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
     else:
         with open('test.json') as fi:
             data=json.load(fi)
-            print("--> LOADED 2 FILE") # try and get this as low as possible.
+            config._print("--> LOADED 2 FILE") # try and get this as low as possible.
         for e in data:
             for key, value in e.items():
-                #print(key)
+                config._print(key)
                 searchArr.append(key)
         for i in searchArr:
-            #print(i)
+            config._print("i (in searchArr): " + i)
+            config._print("quote i: " + quote(f""+i))
             if quote(f""+i) in c.url:
                 conn = sqlite3.connect('app.db')
-                #print(data)
                 for e in data:
+                    config._print("e (in data): " + str(e))
                     for key, value in e.items():
-                        print(key)
+                        config._print("key: " + key)
                         if key == i:
+                            config._print("key <" + str(key) + "> matches <" + str(i) + ">")
                             query="SELECT * FROM COMICS where "
-                            for i in value:
+                            for h in value:
                                 first=True
-                                for j,k in i.items():
+                                for j,k in h.items():
+                                    
                                     if j == 'SQL':
                                         query = query + k
                                     if k != '' and j != "SQL":
-                                        print(j,k)
-                                        if not first:
+                                        config._print(j)
+                                        config._print(k)
+                                        config._print(query)
+                                        if not first and j != 'limit':
                                             query = query + "and "
+                                            config._print(query)
                                         if type(k) == list:
-                                            print(k)
+                                            config._print(k)
                                             if j == "series" or j == "title":
                                                 firstS = True
                                                 query = query + "("
+                                                config._print(query)
                                                 for l in k:
                                                     if not firstS:
                                                         query = query + "or "
+                                                        config._print(query)
                                                     query = query + j + " like '%" + l + "%' "
+                                                    config._print(query)
                                                     if firstS: 
                                                         firstS = False
                                                 query = query + ") "
+                                                config._print(query)
                                             else:
                                                 query = query + j + " in (" 
+                                                config._print(query)
                                                 firstL = True
                                                 for l in k:
                                                     if not firstL: 
                                                         query = query + ","
-                                                    query = query + "'" + l + "'"
+                                                        config._print(query)
+                                                    query = query + "'" + str(l) + "'"
+                                                    config._print(query)
                                                     if firstL:
                                                         firstL = False
                                                 query = query + ") "
+                                                config._print(query)
 
+                                        elif j != 'limit':
+                                            query = query + j + " like '%" + str(k) + "%' "
+                                            config._print(query)
+                                        elif j == 'limit':
+                                            config.DEFAULT_SEARCH_NUMBER = k
                                         else:
-                                            query = query + j + " like '%" + k + "%' "
+                                            print(">>>>>>>>>>>ERROR THIS SHOULD NOT HAPPEN<<<<<<<<<<<")
                                         if first:
                                             first = False
-                            query = query + " order by series asc, cast(issue as unsigned) asc "
-                            if config.DEFAULT_SEARCH_NUMBER != 0:
-                                query = query + "LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";"
-                            else:
-                                query = query + ";"
-                print("----> " + query)
+                                                                                
+                                query = query + " order by series asc, cast(issue as unsigned) asc "
+                                if config.DEFAULT_SEARCH_NUMBER != 0:
+                                    query = query + "LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";"
+                                else:
+                                    query = query + ";"
+                                break
+                        else: 
+                            config._print("key <" + str(key) + "> DOES NOT match <" + str(i) + ">")
+                    
+                config._print("----> " + query)
                                 
                 sql = query
                 #sql="SELECT * from COMICS where SERIES like '%" + i+ "%' or Title like '%" + i+ "%';"
-                #print(sql)
+                #config._print(sql)
                 s = conn.execute(sql)
                 #list=[] 
                 for r in s:
-                    #print(r)
+                    #config._print(r)
                     tUrl=f""+r[7].replace('\\','/').replace(config.WIN_DRIVE_LETTER + ':','').replace(config.CONTENT_BASE_DIR,"/content")
-                    print(tUrl)
+                    #config._print(tUrl)
                     tTitle=r[6]
                     link3 = Link(
                         #href=quote(f"/content/DC Comics/Earth Cities/Gotham City/Batgirl/Annual/(2012) Batgirl Annual/Batgirl Annual #001 - The Blood That Moves Us [December, 2012].cbz"),
@@ -200,7 +224,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                         rpath=path,
                         type="application/x-cbz",
                     )
-                    print(link3.href)
+                    #config._print(link3.href)
                     c.add_entry(
                         Entry(
                             title=tTitle,

@@ -34,6 +34,9 @@
     </author>
     {% endfor %}
     {% if entry.updated %} <updated>{{ entry.updated }}</updated> {% endif %}
+    <link rel="http://opds-spec.org/image"    
+          href="{{ entry.cover }}"
+          type="image/jpg"/>
     {% for link in entry.links %}
     <link rel="{{ link.rel }}"
           href="{{ link.href }}"

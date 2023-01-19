@@ -1,11 +1,12 @@
 [
     {
-        "SQL TEST": [
+        "Amazons": [
             {
-                "SQL": "(series like '%Aqua%' or series like '%girl%') and issue in ('1','2','5','10') and title not like '%Annual%'"
+                "SQL": "(series = 'Nubia & the Amazons' and issue in ('1','2','3','4','5','6')) or (series like 'Trial of the Amazons%' and issue in ('1','2')) or (series = 'Wonder Woman' and issue in ('785','786','787'))"
             }
         ]
-    },{
+    },
+    {
         "Letter 44": [
             {
                 "title": "",
@@ -15,8 +16,9 @@
                 "issue": ""
             }
         ]
-    },{
-        "Man 2020,2019": [
+    },
+    {
+        "Man 2020 or 2019": [
             {
                 "title": "Man",
                 "volume": [
@@ -28,17 +30,19 @@
                 "issue": ""
             }
         ]
-    },{
-        "DC (BAT)": [
+    },
+    {
+        "DC BAT": [
             {
                 "title": "",
                 "volume": "",
                 "publisher": "DC Comics",
-                "series": "%bat%",
+                "series": "Bat",
                 "issue": ""
             }
         ]
-    },{
+    },
+    {
         "Marvel": [
             {
                 "title": "",
@@ -48,48 +52,78 @@
                 "issue": ""
             }
         ]
-    },{
+    },
+    {
         "Girl": [
             {
-                "title": ["girl","man","World"],
+                "title": [
+                    "girl",
+                    "man",
+                    "World"
+                ],
                 "volume": "",
                 "publisher": "",
                 "series": "girl",
                 "issue": ""
             }
         ]
-    },{
+    },
+    {
         "number 1": [
             {
                 "title": "",
                 "volume": "",
                 "publisher": "",
                 "series": "",
-                "issue": ["1"]
+                "issue": [
+                    "1"
+                ]
             }
         ]
-    }
-,
+    },
     {
         "Aquaman": [
             {
-                "title": ["Tyrant King", "The Deluge Act Three", "Warhead Part One"],
+                "title": [
+                    "Tyrant King",
+                    "The Deluge Act Three",
+                    "Warhead Part One",
+                    "Black Mantra"
+                ],
                 "volume": "",
                 "publisher": "",
                 "series": "",
                 "issue": ""
             }
         ]
-    }
-,
+    },
     {
-        "Girl series": [
+        "2020-2022 DC Comics": [
             {
                 "title": "",
-                "volume": "",
+                "volume": [
+                    "2020",
+                    "2022"
+                ],
+                "publisher": "DC Comics",
+                "series": [
+                    "Batman",
+                    "Detective Comics"
+                ],
+                "issue": "",
+                "limit": 50
+            }
+        ]
+    },
+    {
+        "New Series 2023": [
+            {
+                "title": "",
+                "volume": "2023",
                 "publisher": "",
-                "series": "girl",
-                "issue": "2"
+                "series": "",
+                "issue": "1",
+                "limit": 30
             }
         ]
     }

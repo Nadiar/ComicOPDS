@@ -1,4 +1,4 @@
-import os
+import os,re
 
 def get_size(file_path, unit='bytes'):
     file_size = os.path.getsize(file_path)
@@ -9,3 +9,6 @@ def get_size(file_path, unit='bytes'):
     else:
         size = file_size / 1024 ** exponents_map[unit]
         return round(size, 1)
+
+def get_cvdb(string):
+    return re.findall('(?<=\[CVDB)(.*)(?=].)', string[0].text)[0]

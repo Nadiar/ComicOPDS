@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import os
 import re
 
-from extras import get_size
+import extras
 import config
 
 class Entry(object):
@@ -60,12 +60,13 @@ class Entry(object):
             f=self.links[0].get("rpath")+"/"+self.title+".cbz"
             if os.path.exists(f): 
                 s = zipfile.ZipFile(f)
-                self.size = get_size(f, 'mb')
+                self.size = extras.get_size(f, 'mb')
                 data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
                 #self.cover=s.open('P00001.jpg').read()
                 self.authors = data.select('Writer')[0].text.split(",")
-                self.cover = "/image/" + re.findall('(?<=\[CVDB)(.*)(?=].)', data.select('Notes')[0].text)[0] + ".jpg"
+                self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
                 
+
             #print(data)
             #print(kwargs["links"][0])
             #print(data.select('Series')[0].text)

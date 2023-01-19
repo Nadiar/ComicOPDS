@@ -14,7 +14,7 @@ import sys
 import time
 
 from opds import fromdir
-import config
+import config,extras
 
 app = Flask(__name__, static_url_path="", static_folder="static")
 auth = HTTPBasicAuth()
@@ -71,10 +71,10 @@ def import2sql():
 
                         #print(Bs_data.select('Series')[0].text, file=sys.stderr)
                         #print(Bs_data.select('Title')[0].text, file=sys.stderr)
-                        CVDB=re.findall('(?<=\[CVDB)(.*)(?=].)', Bs_data.select('Notes')[0].text)
+                        CVDB=extras.get_cvdb(Bs_data.select('Notes'))
                         
 
-                        #list.append('CVDB'+CVDB[0] + ': '  + Bs_data.select('Series')[0].text + "(" + Bs_data.select('Volume')[0].text + ") : " + Bs_data.select('Number')[0].text  )
+                        #list.append('CVDB'+CVDB + ': '  + Bs_data.select('Series')[0].text + "(" + Bs_data.select('Volume')[0].text + ") : " + Bs_data.select('Number')[0].text  )
                         #print(list, file=sys.stdout)
                 
                         ISSUE=Bs_data.select('Number')[0].text
@@ -88,14 +88,14 @@ def import2sql():
                         PATH=f 
                         UPDATED=filemodtime
                         #print(UPDATED,file=sys.stdout)
-                        #sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB[0]+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
+                        #sql="INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES ("+CVDB+",'"+ISSUE+"','"+SERIES+"','"+VOLUME+"','"+PUBLISHER+"','"+TITLE+"','"+file+"','" + f + "','" + UPDATED + "')"
                         #print(sql,file=sys.stdout)
                         #conn.execute(sql);
                         
                         # CREATE TABLE IF MISSING
                         # create table COMICS (CVDB, ISSUE, SERIES,VOLUME,PUBLISHER,TITLE,FILE,PATH,UPDATED,PRIMARY KEY(CVDB))
                         try:
-                            query = "SELECT UPDATED FROM COMICS WHERE CVDB = '" + str(CVDB[0]) + "';"
+                            query = "SELECT UPDATED FROM COMICS WHERE CVDB = '" + str(CVDB) + "';"
                             savedmodtime = conn.execute(query).fetchone()[0]
                         except:
                             savedmodtime = 0
@@ -103,23 +103,24 @@ def import2sql():
                         #print(float(savedmodtime))
                         #print(type(savedmodtime))
                         #print(type(filemodtime))
+
                         if savedmodtime < filemodtime:
                             #print(str(savedmodtime) + " is less than " + str(filemodtime))
                             
-                            #print(str(CVDB[0]) + " - s: " + str(savedmodtime))
-                            #print(str(CVDB[0]) + " - f: " + str(filemodtime))
+                            #print(str(CVDB) + " - s: " + str(savedmodtime))
+                            #print(str(CVDB) + " - f: " + str(filemodtime))
 
                             cover = s.open(filelist[1]).read()
-                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB[0]) + ".jpg", 'wb+')
+                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
                             c.write(cover)
                             c.close()
 
-                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB[0], ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
+                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
                             conn.commit()
-                            #print("Adding: " + str(CVDB[0]))
+                            #print("Adding: " + str(CVDB))
                             importcount = importcount + 1
                         else:
-                        #    print("Skipping: " + str(CVDB[0]))
+                        #    print("Skipping: " + str(CVDB))
                             skippedcount = skippedcount + 1
                 except Exception as e:
                     errorcount = errorcount + 1

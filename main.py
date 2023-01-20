@@ -79,9 +79,9 @@ def generate():
                             generated = generated + 1
                         elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
                             cover = s.open(filelist[1]).read()
-                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
-                            c.write(cover)
-                            c.close()
+                            image = Image.open(BytesIO(cover))
+                            image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
+                            image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
                             generated = generated + 1
                         else:
                             skippedcount = skippedcount + 1

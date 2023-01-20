@@ -12,6 +12,7 @@ import re
 import datetime
 import sys
 import time
+from pathlib import Path
 
 from opds import fromdir
 import config,extras
@@ -49,6 +50,7 @@ def import2sql():
     list = []
     comiccount = 0
     importcount = 0
+    coverscount = 0
     skippedcount = 0
     errorcount = 0
     comics_with_errors = []
@@ -103,24 +105,29 @@ def import2sql():
                         #print(float(savedmodtime))
                         #print(type(savedmodtime))
                         #print(type(filemodtime))
-
+                        
                         if savedmodtime < filemodtime:
                             #print(str(savedmodtime) + " is less than " + str(filemodtime))
                             
                             #print(str(CVDB) + " - s: " + str(savedmodtime))
                             #print(str(CVDB) + " - f: " + str(filemodtime))
 
+
+                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
+                            conn.commit()
+                            print("Adding: " + str(CVDB))
+                            importcount = importcount + 1
+                        elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
+
+                            #print(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
                             cover = s.open(filelist[1]).read()
                             c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
                             c.write(cover)
                             c.close()
-
-                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
-                            conn.commit()
-                            #print("Adding: " + str(CVDB))
-                            importcount = importcount + 1
+                            coverscount = coverscount + 1
                         else:
-                        #    print("Skipping: " + str(CVDB))
+
+                            print("Skipping: " + f)
                             skippedcount = skippedcount + 1
                 except Exception as e:
                     errorcount = errorcount + 1
@@ -131,7 +138,7 @@ def import2sql():
     conn.close()
     elapsed = timeit.default_timer() - start_time
     elapsed_time = "IMPORTED IN: " + str(round(elapsed,2)) + "s"
-    import_stats = elapsed_time + "<br>Comics: " + str(comiccount) + "<br>Imported: " + str(importcount) + "<br>Skipped: " + str(skippedcount) + "<br>Errors: " + str(errorcount)
+    import_stats = elapsed_time + "<br>Comics: " + str(comiccount) + "<br>Imported: " + str(importcount) + "<br>Covers: " + str(coverscount) + "<br>Skipped: " + str(skippedcount) + "<br>Errors: " + str(errorcount)
     return import_stats #+ "<br>" + ['<li>' + x + '</li>' for x in comics_with_errors]
 
 @app.route("/content/<path:path>")

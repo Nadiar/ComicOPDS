@@ -3,8 +3,8 @@ from werkzeug.security import generate_password_hash
 
 #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
 #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
-#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
-CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
+CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
+#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
 
 THUMBNAIL_DIR = os.getenv("THUMBNAIL_DIR",'thumbnails')
 

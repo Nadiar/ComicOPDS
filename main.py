@@ -149,6 +149,10 @@ def image(path):
 @app.route("/catalog/<path:path>")
 @auth.login_required
 def catalog(path=""):
+    config._print("path: " + path)
+    config._print("root_url: " + request.root_url)
+    config._print("url: " + request.url)
+    config._print("CONTENT_BASE_DIR: " + config.CONTENT_BASE_DIR)
     #print("PRESSED ON")
     start_time = timeit.default_timer()
     #print(request.root_url) 

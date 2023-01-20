@@ -63,8 +63,18 @@ class Entry(object):
                 self.size = extras.get_size(f, 'mb')
                 data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
                 #self.cover=s.open('P00001.jpg').read()
-                self.authors = data.select('Writer')[0].text.split(",")
+
+                if data.select('Writer') != []:
+                    self.authors = data.select('Writer')[0].text.split(",")
+                else:
+                    config._print("No Writer found: " + str(data.select('Writer')))
+                    
                 self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
+
+                if data.select('Summary') != []:
+                    self.summary = data.select('Summary')[0].text
+                else:
+                    config._print("No Summary found: " + str(data.select('Summary')))
                 
 
             #print(data)

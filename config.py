@@ -1,10 +1,14 @@
 import os
 from werkzeug.security import generate_password_hash
+from sys import platform
 
 #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
-#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
-CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
-#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
+
+if platform == "linux" or platform == "linux2":
+    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
+elif platform == "win32":
+    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
+    #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
 
 THUMBNAIL_DIR = os.getenv("THUMBNAIL_DIR",'thumbnails')
 

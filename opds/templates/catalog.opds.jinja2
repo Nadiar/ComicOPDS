@@ -37,6 +37,9 @@
     <link rel="http://opds-spec.org/image"    
           href="{{ entry.cover }}"
           type="image/jpg"/>
+    <link rel="http://opds-spec.org/image/thumbnail"    
+          href="{{ entry.cover }}"
+          type="image/jpg"/>
     {% for link in entry.links %}
     <link rel="{{ link.rel }}"
           href="{{ link.href }}"

@@ -27,6 +27,9 @@ DEFAULT_SEARCH_NUMBER = 10
 # True: logs are printet to terminal
 DEBUG = True
 
+# Max thumbnail size
+MAXSIZE = (500,500)
+
 def _print(arg):
     if DEBUG:
         print(arg)

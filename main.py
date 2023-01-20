@@ -5,6 +5,7 @@ from gevent.pywsgi import WSGIServer
 import timeit
 import sqlite3
 import os
+from PIL import Image
 import zipfile
 import gzip
 from bs4 import BeautifulSoup
@@ -13,6 +14,7 @@ import datetime
 import sys
 import time
 from pathlib import Path
+from io import BytesIO
 
 from opds import fromdir
 import config,extras
@@ -65,9 +67,15 @@ def generate():
                         CVDB=extras.get_cvdb(Bs_data.select('Notes'))
                         if force == 'True':
                             cover = s.open(filelist[1]).read()
-                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
-                            c.write(cover)
-                            c.close()
+
+                            image = Image.open(BytesIO(cover))
+                            image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
+                            image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
+
+                            # Old way of saving without resize 
+                            #c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
+                            #c.write(cover)
+                            #c.close()
                             generated = generated + 1
                         elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
                             cover = s.open(filelist[1]).read()
@@ -81,7 +89,8 @@ def generate():
                         files_withtout_comicinfo = files_without_comicinfo + 1
                 except Exception as e:
                     errorcount = errorcount + 1
-                    config._print("Error (/generate): " + e)
+                    config._print("Error (/generate): " + str(e))
+                    config._print(f)
     return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount)
 
 

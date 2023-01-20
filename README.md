@@ -75,8 +75,8 @@ Any reader that supports OPDS should work, however the following have been verif
 | Aldiko Next (iOS)                                                                                             | ❌  |
 | PocketBook (iOS)                                                               | ✔️  |
 | Moon+ Reader (Android) | ✔️       |
-| Panels (iOS)                                                        |       | ✔️  |
-| Marvin (iOS)                                                        |       | ✔️  |
+| Panels (iOS)                                                               | ✔️  |
+| Marvin (iOS)                                                             | ✔️  |
 
 # Notes
 

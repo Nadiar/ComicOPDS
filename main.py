@@ -44,6 +44,48 @@ def startpage():
 def healthz():
     return "ok"
 
+@app.route("/generate")
+def generate():
+    force = request.args.get('force')
+    generated = 0
+    comiccount = 0
+    files_without_comicinfo = 0
+    errorcount = 0
+    skippedcount = 0
+    for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
+        for file in files:
+            f = os.path.join(root, file)
+            #try:
+            if f.endswith('.cbz'):
+                try:
+                    comiccount = comiccount + 1
+                    s = zipfile.ZipFile(f)
+                    filelist = zipfile.ZipFile.namelist(s)
+                    if filelist[0] == 'ComicInfo.xml':
+                        Bs_data = BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
+                        CVDB=extras.get_cvdb(Bs_data.select('Notes'))
+                        if force == 'True':
+                            cover = s.open(filelist[1]).read()
+                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
+                            c.write(cover)
+                            c.close()
+                            generated = generated + 1
+                        elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
+                            cover = s.open(filelist[1]).read()
+                            c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
+                            c.write(cover)
+                            c.close()
+                            generated = generated + 1
+                        else:
+                            skippedcount = skippedcount + 1
+                    else:
+                        files_withtout_comicinfo = files_without_comicinfo + 1
+                except Exception as e:
+                    errorcount = errorcount + 1
+                    config._print("Error (/generate): " + e)
+    return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount)
+
+
 @app.route('/import')
 def import2sql():
     conn = sqlite3.connect('app.db')

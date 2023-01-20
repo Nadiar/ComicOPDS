@@ -55,7 +55,6 @@ def generate():
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
             f = os.path.join(root, file)
-            #try:
             if f.endswith('.cbz'):
                 try:
                     comiccount = comiccount + 1
@@ -100,7 +99,6 @@ def import2sql():
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
             f = os.path.join(root, file)
-            #try:
             if f.endswith('.cbz'):
                 try:
                     comiccount = comiccount + 1
@@ -108,19 +106,8 @@ def import2sql():
                     filelist = zipfile.ZipFile.namelist(s)
                     if filelist[0] == 'ComicInfo.xml':
                         filemodtime = os.path.getmtime(f)
-                        #s = gzip.GzipFile(f)
                         Bs_data = BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
-
-                        
-
-                        #print(Bs_data.select('Series')[0].text, file=sys.stderr)
-                        #print(Bs_data.select('Title')[0].text, file=sys.stderr)
                         CVDB=extras.get_cvdb(Bs_data.select('Notes'))
-                        
-
-                        #list.append('CVDB'+CVDB + ': '  + Bs_data.select('Series')[0].text + "(" + Bs_data.select('Volume')[0].text + ") : " + Bs_data.select('Number')[0].text  )
-                        #print(list, file=sys.stdout)
-                
                         ISSUE=Bs_data.select('Number')[0].text
                         SERIES=Bs_data.select('Series')[0].text
                         VOLUME=Bs_data.select('Volume')[0].text
@@ -143,40 +130,25 @@ def import2sql():
                             savedmodtime = conn.execute(query).fetchone()[0]
                         except:
                             savedmodtime = 0
-                        #print(savedmodtime)
-                        #print(float(savedmodtime))
-                        #print(type(savedmodtime))
-                        #print(type(filemodtime))
-                        
                         if savedmodtime < filemodtime:
-                            #print(str(savedmodtime) + " is less than " + str(filemodtime))
-                            
-                            #print(str(CVDB) + " - s: " + str(savedmodtime))
-                            #print(str(CVDB) + " - f: " + str(filemodtime))
-
-
                             conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
                             conn.commit()
-                            print("Adding: " + str(CVDB))
+                            config._print("Adding: " + str(CVDB))
                             importcount = importcount + 1
                         elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
-
-                            #print(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
                             cover = s.open(filelist[1]).read()
                             c = open(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg", 'wb+')
                             c.write(cover)
                             c.close()
                             coverscount = coverscount + 1
                         else:
-
-                            print("Skipping: " + f)
+                            config._print("Skipping: " + f)
                             skippedcount = skippedcount + 1
                 except Exception as e:
                     errorcount = errorcount + 1
                     comics_with_errors.append(f)
-                    print(e)
-                    #print(f,file=sys.stdout)
-    print(comics_with_errors)
+                    config._print(e)
+    config._print(comics_with_errors)
     conn.close()
     elapsed = timeit.default_timer() - start_time
     elapsed_time = "IMPORTED IN: " + str(round(elapsed,2)) + "s"

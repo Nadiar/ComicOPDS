@@ -10,11 +10,21 @@ elif platform == "win32":
     CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
     #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
 
+
+# Added folder for thumbnails. These are loaded as covers for the files.
 THUMBNAIL_DIR = os.getenv("THUMBNAIL_DIR",'thumbnails')
 
+# If using Windows, insert the drive letter of your comics here. 
+# Both the script and comics needs to be on the same drive.
 WIN_DRIVE_LETTER = 'B'
+
+# If using custom searches, then insert the default amout of results here. 
+# It is also possible to override this in the json file.
 DEFAULT_SEARCH_NUMBER = 10
 
+# Debug output
+# False: no print out in terminal
+# True: logs are printet to terminal
 DEBUG = True
 
 def _print(arg):

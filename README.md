@@ -70,13 +70,14 @@ In the `config.py` file you need to change like 4 from `"/library"` to your comi
 Any reader that supports OPDS should work, however the following have been verified to work/not work
 
 | App                                                                                                   | iOS |
-| -----------------------------------------------------------------------------------------------------  | --- |
+| ----------------------------------------------------------------------------  | --- |
 | KyBook 3 (iOS)                                                             | ✔️  |
 | Aldiko Next (iOS)                                                                                             | ❌  |
 | PocketBook (iOS)                                                               | ✔️  |
 | Moon+ Reader (Android) | ✔️       |
 | Panels (iOS)                                                               | ✔️  |
 | Marvin (iOS)                                                             | ✔️  |
+| Chunky (iOS)                                                             | ✔️  |
 
 # Notes
 

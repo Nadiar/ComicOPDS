@@ -16,6 +16,10 @@ import time
 from pathlib import Path
 from io import BytesIO
 
+# for debugging
+from pprint import pprint
+####
+
 from opds import fromdir
 import config,extras
 
@@ -187,6 +191,11 @@ def catalog(path=""):
     start_time = timeit.default_timer()
     #print(request.root_url) 
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
+    print("c: ")
+    pprint(vars(c))
+    for x in c.entries:
+        pprint(vars(x))
+    print("------")
     elapsed = timeit.default_timer() - start_time
     print("-----------------------------------------------------------------------------------------------------------------------")
     print("RENDERED IN: " + str(round(elapsed,2))+"s")

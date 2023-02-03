@@ -1,3 +1,61 @@
+<html>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.min.js"></script>
+<body>
+
+<canvas id="myChart" style="width:100%;max-width:600px"></canvas>
+
+<script>
+var xValues = {{ pub_list | safe }};
+var yValues = {{ count }};
+var barColors = ["red", "green","blue","orange"];
+
+new Chart("myChart", {
+  type: "bar",
+  data: {
+    labels: xValues,
+    datasets: [{
+      backgroundColor: barColors,
+      data: yValues
+    }]
+  },
+  options: {
+    legend: {display: false},
+    title: {
+      display: true,
+      text: "Publishers"
+    }
+  }
+});
+</script>
+
+
+<canvas id="myChart3" style="width:100%;max-width:600px"></canvas>
+
+
+<script>
+var xValues = {{ x | safe }};
+var yValues = {{ y | safe }};
+
+new Chart("myChart3", {
+  type: "line",
+  data: {
+    labels: xValues,
+    datasets: [{
+      fill: false,
+      backgroundColor: "rgba(0,0,255,1.0)",
+      borderColor: "rgba(0,0,255,0.1)",
+      data: yValues
+    }]
+  },
+  options: {
+    legend: {display: false},
+  }
+});
+</script>
+
+
+
+
 <table id="comics">
   {% for i in result %}
   <tr>
@@ -7,3 +65,7 @@
   </tr>
   {% endfor %}
 </table>
+
+
+</body>
+</html>

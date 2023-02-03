@@ -43,8 +43,23 @@ def startpage():
     cursor = conn.cursor()
     cursor.execute("select * from comics LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";")
     result = cursor.fetchall()
+    
+    pub_list = ["Marvel", "DC Comics","Dark Horse Comics","Oni Press"]
+    count = []
+    for i in pub_list:
+        cursor.execute("select count(*) from comics where Publisher = '" + i + "';")
+        count.append(cursor.fetchone()[0])
+
+    cursor.execute("SELECT volume, COUNT(volume) FROM comics GROUP BY volume ORDER BY volume;")
+    volume = cursor.fetchall()
+
+    x = []
+    y = []
+    for i in volume:
+        x.append(i[0])
+        y.append(i[1])
     conn.close()
-    return render_template("start.html", result=result)
+    return render_template("start.html", result=result,pub_list=pub_list,count=count,x=x,y=y)
 
 @app.route("/healthz")
 def healthz():
@@ -194,7 +209,8 @@ def catalog(path=""):
     print("c: ")
     pprint(vars(c))
     for x in c.entries:
-        pprint(vars(x))
+        for y in x.links:
+            pprint(y.href)
     print("------")
     elapsed = timeit.default_timer() - start_time
     print("-----------------------------------------------------------------------------------------------------------------------")

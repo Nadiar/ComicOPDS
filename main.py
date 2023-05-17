@@ -1,4 +1,4 @@
-from flask import Flask, render_template, send_from_directory, request
+from flask import Flask, redirect,url_for,  render_template, send_from_directory, request
 from flask_httpauth import HTTPBasicAuth
 from werkzeug.security import check_password_hash
 from gevent.pywsgi import WSGIServer
@@ -13,6 +13,7 @@ import re
 import datetime
 import sys
 import time
+import numpy as np
 from pathlib import Path
 from io import BytesIO
 
@@ -35,31 +36,82 @@ def verify_password(username, password):
     ):
         return username
 
-
-@app.route("/")
+@app.route("/", methods=['POST','GET'])
 def startpage():
     #result = "Hello, World!"
+    config._print(request.method)
+    if request.method == 'POST':
+        if request.form.get('Create') == 'Create':
+            # pass
+            config._print("open")
+            conn = sqlite3.connect('app.db')
+            cursor = conn.cursor()
+        
+            cursor.execute("create table COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED,PRIMARY KEY(CVDB))")
+            result = cursor.fetchall()
+            conn.close()
+            config._print("Encrypted")
+        elif  request.form.get('Import') == 'Import':
+            # pass # do something else
+            config._print("Decrypted")
+            return redirect(url_for('import2sql'))
+        elif request.form.get('Generate') == 'Generate':
+            config._print("Generate Covers from Start page")
+            return redirect(url_for('generate'))
+        else:
+            # pass # unknown
+            return render_template("first.html")
+    elif request.method == 'GET':
+        # return render_template("index.html")
+        config._print("No Post Back Call")
     conn = sqlite3.connect('app.db')
     cursor = conn.cursor()
-    cursor.execute("select * from comics LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";")
-    result = cursor.fetchall()
     
-    pub_list = ["Marvel", "DC Comics","Dark Horse Comics","Oni Press"]
-    count = []
-    for i in pub_list:
-        cursor.execute("select count(*) from comics where Publisher = '" + i + "';")
-        count.append(cursor.fetchone()[0])
+    try:
+        cursor.execute("select * from comics LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";")
+        result = cursor.fetchall()
+    
+        pub_list = ["Marvel", "DC Comics","Dark Horse Comics","Oni Press"]
+        count = []
+        for i in pub_list:
+            cursor.execute("select count(*) from comics where Publisher = '" + i + "';")
+            count.append(cursor.fetchone()[0])
 
-    cursor.execute("SELECT volume, COUNT(volume) FROM comics GROUP BY volume ORDER BY volume;")
-    volume = cursor.fetchall()
+        cursor.execute("SELECT volume, COUNT(volume) FROM comics GROUP BY volume ORDER BY volume;")
+        volume = cursor.fetchall()
+        
+        
 
-    x = []
-    y = []
-    for i in volume:
-        x.append(i[0])
-        y.append(i[1])
-    conn.close()
-    return render_template("start.html", result=result,pub_list=pub_list,count=count,x=x,y=y)
+        x = []
+        y = []
+        for i in volume:
+            x.append(i[0])
+            y.append(i[1])
+        conn.close()
+
+        try:
+            total = np.sum(np.array(volume).astype('int')[:,1],axis=0)
+            dir_path = r'thumbnails'
+            covers = 0
+            for path in os.listdir(dir_path):
+                if os.path.isfile(os.path.join(dir_path,path)):
+                    covers += 1
+            config._print("covers: " + str(covers))
+        except Exception as e:
+            config._print(e)
+        return render_template("start.html", first=False,result=result,pub_list=pub_list,count=count,x=x,y=y,total=total,covers=covers)
+    except:
+        conn.close()
+
+        config._print('first')
+        return render_template("start.html",first=True)
+
+#@app.route("/first", methods=['GET', 'POST'])
+#def first():
+#   return render_template('first.html',result=result) 
+
+
+
 
 @app.route("/healthz")
 def healthz():
@@ -85,7 +137,8 @@ def generate():
                         Bs_data = BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
                         CVDB=extras.get_cvdb(Bs_data.select('Notes'))
                         if force == 'True':
-                            cover = s.open(filelist[1]).read()
+                            ext = [i for i, x in enumerate(filelist) if re.search("(?i)\.jpg|png|jpeg$", x)]
+                            cover = s.open(filelist[ext[0]]).read()
 
                             image = Image.open(BytesIO(cover))
                             image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
@@ -97,7 +150,13 @@ def generate():
                             #c.close()
                             generated = generated + 1
                         elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
-                            cover = s.open(filelist[1]).read()
+                            ext = [i for i, x in enumerate(filelist) if re.search("(?i)\.jpg|png|jpeg$", x)]
+                            config._print(filelist)
+                            config._print(ext)
+                            config._print(filelist[ext[0]])
+                            cover = s.open(filelist[ext[0]]).read()
+                            #xyz = [i for i, x in enumerate(filelist) if re.match('*\.py$',x)]
+                            #config._print(xyz)
                             image = Image.open(BytesIO(cover))
                             image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
                             image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
@@ -198,16 +257,16 @@ def image(path):
 @app.route("/catalog/<path:path>")
 @auth.login_required
 def catalog(path=""):
-    config._print("path: " + path)
-    config._print("root_url: " + request.root_url)
-    config._print("url: " + request.url)
-    config._print("CONTENT_BASE_DIR: " + config.CONTENT_BASE_DIR)
+    #config._print("path: " + path)
+    #config._print("root_url: " + request.root_url)
+    #config._print("url: " + request.url)
+    #config._print("CONTENT_BASE_DIR: " + config.CONTENT_BASE_DIR)
     #print("PRESSED ON")
     start_time = timeit.default_timer()
     #print(request.root_url) 
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
-    print("c: ")
-    pprint(vars(c))
+    #print("c: ")
+    #pprint(vars(c))
     for x in c.entries:
         for y in x.links:
             pprint(y.href)

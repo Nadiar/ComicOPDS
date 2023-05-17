@@ -47,7 +47,7 @@ def startpage():
             conn = sqlite3.connect('app.db')
             cursor = conn.cursor()
         
-            cursor.execute("create table COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED,PRIMARY KEY(CVDB))")
+            cursor.execute("create table COMICS (CVDB,ISSUE,SERIES,VOLUME, YEAR, PUBLISHER, TITLE, FILE,PATH,UPDATED,PRIMARY KEY(CVDB))")
             result = cursor.fetchall()
             conn.close()
             config._print("Encrypted")
@@ -68,16 +68,17 @@ def startpage():
     cursor = conn.cursor()
     
     try:
-        cursor.execute("select * from comics LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ";")
+        cursor.execute("select * from comics where CVDB in (SELECT CVDB from comics order by RANDOM() LIMIT " + str(config.DEFAULT_SEARCH_NUMBER) + ");")
         result = cursor.fetchall()
     
-        pub_list = ["Marvel", "DC Comics","Dark Horse Comics","Oni Press"]
+        pub_list = ["Marvel", "DC Comics","Dark Horse Comics", "Dynamite Entertainment", "Oni Press"]
         count = []
         for i in pub_list:
             cursor.execute("select count(*) from comics where Publisher = '" + i + "';")
             count.append(cursor.fetchone()[0])
 
-        cursor.execute("SELECT volume, COUNT(volume) FROM comics GROUP BY volume ORDER BY volume;")
+        #cursor.execute("SELECT volume, COUNT(volume) FROM comics GROUP BY volume ORDER BY volume;")
+        cursor.execute("SELECT year, COUNT(year) FROM comics GROUP BY year ORDER BY year;")
         volume = cursor.fetchall()
         
         
@@ -206,6 +207,7 @@ def import2sql():
                         ISSUE=Bs_data.select('Number')[0].text
                         SERIES=Bs_data.select('Series')[0].text
                         VOLUME=Bs_data.select('Volume')[0].text
+                        YEAR=Bs_data.select('Year')[0].text
                         PUBLISHER=Bs_data.select('Publisher')[0].text
                         try:
                             TITLE=Bs_data.select('Title')[0].text
@@ -226,7 +228,7 @@ def import2sql():
                         except:
                             savedmodtime = 0
                         if savedmodtime < filemodtime:
-                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, PUBLISHER, TITLE, file, f, UPDATED))
+                            conn.execute("INSERT OR REPLACE INTO COMICS (CVDB,ISSUE,SERIES,VOLUME, YEAR, PUBLISHER, TITLE, FILE,PATH,UPDATED) VALUES (?,?,?,?,?,?,?,?,?,?)", (CVDB, ISSUE, SERIES, VOLUME, YEAR, PUBLISHER, TITLE, file, f, UPDATED))
                             conn.commit()
                             config._print("Adding: " + str(CVDB))
                             importcount = importcount + 1

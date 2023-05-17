@@ -70,7 +70,7 @@ class Entry(object):
                     else:
                         config._print("No Writer found: " + str(data.select('Writer')))
                         
-                    #self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
+                    self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
                     #if data.select('Title') != []:
                     #    self.title = data.select('Title')[0]
                         

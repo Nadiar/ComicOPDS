@@ -125,6 +125,7 @@ def generate():
     files_without_comicinfo = 0
     errorcount = 0
     skippedcount = 0
+    errormsg = ""
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
             f = os.path.join(root, file)
@@ -139,8 +140,9 @@ def generate():
                         if force == 'True':
                             ext = [i for i, x in enumerate(filelist) if re.search("(?i)\.jpg|png|jpeg$", x)]
                             cover = s.open(filelist[ext[0]]).read()
-
+                            
                             image = Image.open(BytesIO(cover))
+                            rgb_im = image.convert("RGB")
                             image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
                             image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
 
@@ -149,18 +151,23 @@ def generate():
                             #c.write(cover)
                             #c.close()
                             generated = generated + 1
-                        elif Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
-                            ext = [i for i, x in enumerate(filelist) if re.search("(?i)\.jpg|png|jpeg$", x)]
-                            config._print(filelist)
-                            config._print(ext)
-                            config._print(filelist[ext[0]])
-                            cover = s.open(filelist[ext[0]]).read()
-                            #xyz = [i for i, x in enumerate(filelist) if re.match('*\.py$',x)]
-                            #config._print(xyz)
-                            image = Image.open(BytesIO(cover))
-                            image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
-                            image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
-                            generated = generated + 1
+                        if Path(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg").exists() == False:
+                            config._print("generating for " + str(CVDB))
+                            try: 
+                                ext = [i for i, x in enumerate(filelist) if re.search("(?i)\.jpg|png|jpeg$", x)]
+                                #config._print(filelist)
+                                #config._print(ext)
+                                #config._print(filelist[ext[0]])
+                                cover = s.open(filelist[ext[0]]).read()
+                                #xyz = [i for i, x in enumerate(filelist) if re.match('*\.py$',x)]
+                                #config._print(xyz)
+                                image = Image.open(BytesIO(cover))
+                                image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
+                                image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
+                                generated = generated + 1
+                            except Exception as e:
+                                errormsg = str(e)
+                                print(e)
                         else:
                             skippedcount = skippedcount + 1
                     else:
@@ -169,7 +176,8 @@ def generate():
                     errorcount = errorcount + 1
                     config._print("Error (/generate): " + str(e))
                     config._print(f)
-    return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount)
+                    errormsg = str(e)
+    return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount) + "<br>" + errormsg
 
 
 @app.route('/import')

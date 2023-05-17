@@ -53,6 +53,7 @@ class Entry(object):
         
         #print(">>entry.py")
         #print(kwargs)
+        print(kwargs["title"])
         #print(kwargs["links"][0].get("rpath"))
         #print("--end entry.py")
         try:
@@ -60,8 +61,8 @@ class Entry(object):
                 f=self.links[0].get("rpath")+"/"+self.title+".cbz"
                 if os.path.exists(f): 
                     s = zipfile.ZipFile(f)
-                    #self.size = extras.get_size(f, 'mb')
-                    data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
+                    self.size = extras.get_size(f, 'mb')
+                    data=BeautifulSoup(s.open('ComicInfo.xml').read(), features="html.parser")
                     #self.cover=s.open('P00001.jpg').read()
 
                     if data.select('Writer') != []:
@@ -70,9 +71,16 @@ class Entry(object):
                         config._print("No Writer found: " + str(data.select('Writer')))
                         
                     #self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
-
+                    #if data.select('Title') != []:
+                    #    self.title = data.select('Title')[0]
+                        
+                    #    print(data.select('Title')[0])
+                    title = data.select('Title')[0].text.replace("&","&amp;")
+                    kwargs["title"] = title
+                    print(title)
                     if data.select('Summary') != []:
-                        self.summary = data.select('Summary')[0].text
+                        #print(data.select('Summary')[0].text)
+                        self.summary = data.select('Summary')[0]
                     else:
                         config._print("No Summary found: " + str(data.select('Summary')))
                     
@@ -84,12 +92,12 @@ class Entry(object):
                     if data.select('Series')[0].text in kwargs["links"][0].get("rpath"):
                         releasedate=data.select('Year')[0].text+"-"+data.select('Month')[0].text.zfill(2)+"-"+data.select('Day')[0].text.zfill(2)
                         try:
-                            self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ") [" + str(self.size) + "MB]"
+                            self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + title + " (" + releasedate + ") [" + str(self.size) + "MB]"
                         except:
                             self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ") [" + str(self.size) + "MB]"
                 #print(self.title)
                     else:
-                        self.title = kwargs["title"]
+                        self.title = title
 
                 else:
                     self.title = kwargs["title"]

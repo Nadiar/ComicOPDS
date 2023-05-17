@@ -245,7 +245,7 @@ def import2sql():
 @app.route("/content/<path:path>")
 @auth.login_required
 def send_content(path):
-    print('content')
+    #print('content')
     return send_from_directory(config.CONTENT_BASE_DIR, path)
 
 @app.route("/image/<path:path>")
@@ -267,10 +267,10 @@ def catalog(path=""):
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
     #print("c: ")
     #pprint(vars(c))
-    for x in c.entries:
-        for y in x.links:
-            pprint(y.href)
-    print("------")
+    #for x in c.entries:
+    #    for y in x.links:
+    #        pprint(y.href)
+    #print("------")
     elapsed = timeit.default_timer() - start_time
     print("-----------------------------------------------------------------------------------------------------------------------")
     print("RENDERED IN: " + str(round(elapsed,2))+"s")

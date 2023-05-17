@@ -55,45 +55,47 @@ class Entry(object):
         #print(kwargs)
         #print(kwargs["links"][0].get("rpath"))
         #print("--end entry.py")
+        try:
+            if kwargs["links"][0].get("type") == 'application/x-cbz':
+                f=self.links[0].get("rpath")+"/"+self.title+".cbz"
+                if os.path.exists(f): 
+                    s = zipfile.ZipFile(f)
+                    #self.size = extras.get_size(f, 'mb')
+                    data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
+                    #self.cover=s.open('P00001.jpg').read()
 
-        if kwargs["links"][0].get("type") == 'application/x-cbz':
-            f=self.links[0].get("rpath")+"/"+self.title+".cbz"
-            if os.path.exists(f): 
-                s = zipfile.ZipFile(f)
-                self.size = extras.get_size(f, 'mb')
-                data=BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
-                #self.cover=s.open('P00001.jpg').read()
+                    if data.select('Writer') != []:
+                        self.authors = data.select('Writer')[0].text.split(",")
+                    else:
+                        config._print("No Writer found: " + str(data.select('Writer')))
+                        
+                    #self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
 
-                if data.select('Writer') != []:
-                    self.authors = data.select('Writer')[0].text.split(",")
-                else:
-                    config._print("No Writer found: " + str(data.select('Writer')))
+                    if data.select('Summary') != []:
+                        self.summary = data.select('Summary')[0].text
+                    else:
+                        config._print("No Summary found: " + str(data.select('Summary')))
                     
-                self.cover = "/image/" + extras.get_cvdb(data.select('Notes')) + ".jpg"
 
-                if data.select('Summary') != []:
-                    self.summary = data.select('Summary')[0].text
-                else:
-                    config._print("No Summary found: " + str(data.select('Summary')))
-                
+                #print(data)
+                #print(kwargs["links"][0])
+                #print(data.select('Series')[0].text)
+                #print(kwargs["links"][0].get("rpath"))
+                    if data.select('Series')[0].text in kwargs["links"][0].get("rpath"):
+                        releasedate=data.select('Year')[0].text+"-"+data.select('Month')[0].text.zfill(2)+"-"+data.select('Day')[0].text.zfill(2)
+                        try:
+                            self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ") [" + str(self.size) + "MB]"
+                        except:
+                            self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ") [" + str(self.size) + "MB]"
+                #print(self.title)
+                    else:
+                        self.title = kwargs["title"]
 
-            #print(data)
-            #print(kwargs["links"][0])
-            #print(data.select('Series')[0].text)
-            #print(kwargs["links"][0].get("rpath"))
-                if data.select('Series')[0].text in kwargs["links"][0].get("rpath"):
-                    releasedate=data.select('Year')[0].text+"-"+data.select('Month')[0].text.zfill(2)+"-"+data.select('Day')[0].text.zfill(2)
-                    try:
-                        self.title = "#"+data.select('Number')[0].text.zfill(2) + ": " + data.select('Title')[0].text + " (" + releasedate + ") [" + str(self.size) + "MB]"
-                    except:
-                        self.title = "#"+data.select('Number')[0].text.zfill(2) + " (" + releasedate + ") [" + str(self.size) + "MB]"
-            #print(self.title)
                 else:
                     self.title = kwargs["title"]
-
-            else:
-                self.title = kwargs["title"]
-            #self.title = data.select('Title')[0].text
+                #self.title = data.select('Title')[0].text
+        except Exception as e:
+            config._print(e)
     def get(self, key):
         return self._data.get(key, None)
 

@@ -2,17 +2,17 @@ import os
 from werkzeug.security import generate_password_hash
 from sys import platform
 
-#CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
+CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
 
-if platform == "linux" or platform == "linux2":
-    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
-elif platform == "win32":
-    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
+#if platform == "linux" or platform == "linux2":
+#    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/home/drudoo/ComicsTest/Comics") #linux
+#elif platform == "win32":
+#    CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/Comics/ComicRack") #windows
     #CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "testlibrary") #windows test library
 
 
 # Added folder for thumbnails. These are loaded as covers for the files.
-THUMBNAIL_DIR = os.getenv("THUMBNAIL_DIR",'thumbnails')
+THUMBNAIL_DIR = os.getenv("THUMBNAIL_DIR",'/thumbnails')
 
 # If using Windows, insert the drive letter of your comics here. 
 # Both the script and comics needs to be on the same drive.

@@ -144,7 +144,7 @@ def generate():
                             
                             image = Image.open(BytesIO(cover))
                             rgb_im = image.convert("RGB")
-                            image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
+                            image.thumbnail(config.MAXSIZE,Image.LANCZOS)
                             image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
 
                             # Old way of saving without resize 
@@ -163,7 +163,7 @@ def generate():
                                 #xyz = [i for i, x in enumerate(filelist) if re.match('*\.py$',x)]
                                 #config._print(xyz)
                                 image = Image.open(BytesIO(cover))
-                                image.thumbnail(config.MAXSIZE,Image.ANTIALIAS)
+                                image.thumbnail(config.MAXSIZE,Image.LANCZOS)
                                 image.save(config.THUMBNAIL_DIR + "/" + str(CVDB) + ".jpg")
                                 generated = generated + 1
                             except Exception as e:

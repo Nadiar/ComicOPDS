@@ -9,5 +9,5 @@ services:
     volumes:
       #- '/opt/data/Comics/ComicRack:/library:ro'
       - '/home/drudoo/Pi1/Comics/ComicRack:/library:ro'
-      - '${PWD}/thumbnails:/thumbnails:ro'
+      - '${PWD}/thumbnails:/thumbnails'
       - '${PWD}/:/app'

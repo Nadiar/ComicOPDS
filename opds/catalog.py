@@ -86,8 +86,10 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
         onlydirs = [
             f for f in os.listdir(path) if not os.path.isfile(os.path.join(path, f))
         ]
-    #print(onlydirs)
+        onlydirs.sort()
+        print(onlydirs)
         for dirname in onlydirs:
+            print(dirname)
             link = Link(
                 href=quote(f"/catalog/{content_relative_path}/{dirname}").replace('//','/'), #windows fix
                 rel="subsection",
@@ -113,6 +115,8 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
         onlyfiles = [f for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))]
         onlyfiles.sort()
         for filename in onlyfiles:
+            if not filename.endswith('cbz'):
+                continue
             link = Link(
                 href=quote(f"/content/{content_relative_path}/{filename}"),
                 rel="http://opds-spec.org/acquisition",

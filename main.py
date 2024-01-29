@@ -275,11 +275,11 @@ def catalog(path=""):
     #start_time = timeit.default_timer()
     #print(request.root_url) 
     c = fromdir(request.root_url, request.url, config.CONTENT_BASE_DIR, path)
-    print("c: ")
+    #print("c: ")
     #pprint(vars(c))
-    for x in c.entries:
-        for y in x.links:
-            pprint(y.href)
+    #for x in c.entries:
+    #    for y in x.links:
+    #        pprint(y.href)
     #print("------")
     #elapsed = timeit.default_timer() - start_time
     #print("-----------------------------------------------------------------------------------------------------------------------")

@@ -62,7 +62,7 @@ class Entry(object):
                 if os.path.exists(f): 
                     s = zipfile.ZipFile(f)
                     self.size = extras.get_size(f, 'mb')
-                    data=BeautifulSoup(s.open('ComicInfo.xml').read(), features="html.parser")
+                    data=BeautifulSoup(s.open('ComicInfo.xml').read(), features="lxml")
                     #self.cover=s.open('P00001.jpg').read()
 
                     if data.select('Writer') != []:

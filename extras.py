@@ -1,5 +1,15 @@
 import os,re
 
+table = str.maketrans({
+    "<": "&lt;",
+    ">": "&gt;",
+    "&": "&amp;",
+    "'": "&apos;",
+    '"': "&quot;",
+})
+def xmlesc(txt):
+    return txt.translate(table)
+
 def get_size(file_path, unit='bytes'):
     file_size = os.path.getsize(file_path)
     exponents_map = {'bytes': 0, 'kb': 1, 'mb': 2, 'gb': 3}

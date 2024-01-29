@@ -6,6 +6,7 @@ from .entry import Entry
 from .link import Link
 import sqlite3,json
 import config
+import extras
 
 class Catalog(object):
     def __init__(
@@ -47,8 +48,7 @@ def fromsearch(root_url, url, content_base_path, content_relative_path):
     return c
 
 def fromdir(root_url, url, content_base_path, content_relative_path):
-
-
+    
     path = os.path.join(content_base_path, content_relative_path)
 
     if os.path.basename(content_relative_path) == "":
@@ -59,7 +59,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
             )
     else:
         c = Catalog(
-            title=os.path.basename(content_relative_path), 
+            title=extras.xmlesc(os.path.basename(content_relative_path)),
             root_url=root_url, 
             url=url
         )
@@ -94,7 +94,7 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 rpath=path,
                 type="application/atom+xml;profile=opds-catalog;kind=acquisition",
             )
-            c.add_entry(Entry(title=dirname, id=uuid4(), links=[link]))
+            c.add_entry(Entry(title=extras.xmlesc(dirname), id=uuid4(), links=[link]))
 
     
     if c.url.endswith("/catalog"):
@@ -119,7 +119,10 @@ def fromdir(root_url, url, content_base_path, content_relative_path):
                 rpath=path,
                 type=mimetype(filename),
             )
-            c.add_entry(Entry(title=filename.rsplit(".",1)[0], id=uuid4(), links=[link]))
+
+            #c.add_entry(Entry(title=filename.rsplit(".",1)[0], id=uuid4(), links=[link]))
+            c.add_entry(Entry(title=extras.xmlesc(filename).rsplit(".",1)[0], id=uuid4(), links=[link]))
+        
             #fixed issue with multiple . in filename
             #print(c.render()) 
     else:

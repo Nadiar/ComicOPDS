@@ -118,6 +118,24 @@ def startpage():
 def healthz():
     return "ok"
 
+@app.route('/search')
+def search():
+    args = request.args.get('q')
+    print(args)
+    conn = sqlite3.connect('app.db')
+    cursor = conn.cursor()
+    result = 'no good' 
+    try:
+        cursor.execute("select TITLE, PATH from comics where TITLE like '%" + str(args) + "%';")
+        result = cursor.fetchall()
+
+        cursor.close()
+        for i in result:
+            print(i) 
+    except Exception as e:
+        config._print(e)
+    return str(result)
+
 @app.route("/generate")
 def generate():
     force = request.args.get('force')
@@ -135,7 +153,7 @@ def generate():
                     comiccount = comiccount + 1
                     s = zipfile.ZipFile(f)
                     filelist = zipfile.ZipFile.namelist(s)
-                    if filelist[0] == 'ComicInfo.xml':
+                    if 'ComicInfo.xml' in filelist:
                         Bs_data = BeautifulSoup(s.open('ComicInfo.xml').read(), "xml")
                         CVDB=extras.get_cvdb(Bs_data.select('Notes'))
                         if force == 'True':
@@ -168,10 +186,12 @@ def generate():
                                 generated = generated + 1
                             except Exception as e:
                                 errormsg = str(e)
-                                print(e)
+                                config._print(e)
                         else:
-                            skippedcount = skippedcount + 1
+                            if not force:
+                                skippedcount = skippedcount + 1
                     else:
+                        print("Error at: " + str(CVDB) + " " + str(f))
                         files_withtout_comicinfo = files_without_comicinfo + 1
                 except Exception as e:
                     errorcount = errorcount + 1
@@ -179,6 +199,7 @@ def generate():
                     config._print(f)
                     errormsg = str(e)
     return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount) + "<br>" + errormsg
+
 
 
 @app.route('/import')

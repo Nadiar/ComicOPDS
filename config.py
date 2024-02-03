@@ -1,6 +1,7 @@
 import os
 from werkzeug.security import generate_password_hash
 from sys import platform
+import sys
 
 CONTENT_BASE_DIR = os.getenv("CONTENT_BASE_DIR", "/library") #docker
 
@@ -32,7 +33,7 @@ MAXSIZE = (500,500)
 
 def _print(arg):
     if DEBUG:
-        print(arg)
+        print(arg,file=sys.stderr)
 
 TEENYOPDS_ADMIN_PASSWORD = os.getenv("TEENYOPDS_ADMIN_PASSWORD", None)
 users = {}

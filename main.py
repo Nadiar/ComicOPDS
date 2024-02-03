@@ -13,13 +13,17 @@ import re
 import datetime
 import sys
 import time
+import json
 import numpy as np
 from pathlib import Path
 from io import BytesIO
+from threading import Thread
 
 # for debugging
 from pprint import pprint
 ####
+
+generated = None
 
 from opds import fromdir
 import config,extras
@@ -57,7 +61,8 @@ def startpage():
             return redirect(url_for('import2sql'))
         elif request.form.get('Generate') == 'Generate':
             config._print("Generate Covers from Start page")
-            return redirect(url_for('generate'))
+             
+            return redirect(url_for('generate2'))
         else:
             # pass # unknown
             return render_template("first.html")
@@ -136,9 +141,14 @@ def search():
         config._print(e)
     return str(result)
 
-@app.route("/generate")
+total = None
+#@app.route("/generate")
 def generate():
-    force = request.args.get('force')
+    config._print('GENERATES NOW!!!')
+    force = 'True' #request.args.get('force')
+    global generated
+    global total
+    total = 0
     generated = 0
     comiccount = 0
     files_without_comicinfo = 0
@@ -147,8 +157,14 @@ def generate():
     errormsg = ""
     for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
         for file in files:
+            f = os.path.join(root,file)
+            if f.endswith('.cbz'):
+                total = total + 1
+    for root, dirs, files in os.walk(os.path.abspath(config.CONTENT_BASE_DIR)):
+        for file in files:
             f = os.path.join(root, file)
             if f.endswith('.cbz'):
+                config._print(generated)
                 try:
                     comiccount = comiccount + 1
                     s = zipfile.ZipFile(f)
@@ -199,8 +215,25 @@ def generate():
                     config._print(f)
                     errormsg = str(e)
     return "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount) + "<br>" + errormsg
+    config._print( "Forced generation: " + str(force) + "<br>Comics: " + str(comiccount) + "<br>Generated: " + str(generated) + "<br>CBZ files without ComicInfo.xml: " + str(files_without_comicinfo) + "<br>Errors: " + str(errorcount) + "<br>Skipped: " + str(skippedcount) + "<br>" + errormsg)
+
+@app.route("/generate2")
+def generate2():
+    t1 = Thread(target=generate)
+    t1.start()
+    return render_template('status.html')
 
 
+@app.route("/t2")
+def index():
+    t1 = Thread(target=generate)
+    t1.start()
+    return render_template('status.html')
+    
+@app.route('/status',methods=['GET'])
+def getStatus():
+    statusList = {'status':generated,'total':total}
+    return json.dumps(statusList)
 
 @app.route('/import')
 def import2sql():

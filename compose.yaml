@@ -1,7 +1,6 @@
 services:
   comicopds:
     build: .
-    image: comicopds:latest
     ports:
       - "8382:8080"
     environment:
@@ -13,5 +12,5 @@ services:
       OPDS_BASIC_PASS: "change-me"
       ENABLE_WATCH: "false"                         # true/false (not 1/0)
     volumes:
-      - /path/to/your/comics:/library:ro
+      - "/mnt/disk1/Comics/ComicRack/Oni Press:/library:ro"
       - ./data:/data

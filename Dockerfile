@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app /app/app
+COPY app /app
 
 ENV CONTENT_BASE_DIR=/library \
     PAGE_SIZE=50 \

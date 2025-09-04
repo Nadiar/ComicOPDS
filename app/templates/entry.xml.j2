@@ -1,0 +1,28 @@
+<entry xmlns="http://www.w3.org/2005/Atom"
+       xmlns:dcterms="http://purl.org/dc/terms/"
+       xmlns:opds="http://opds-spec.org/2010/catalog">
+  <id>{{ entry_id }}</id>
+  <updated>{{ updated }}</updated>
+  <title>{{ title }}</title>
+
+  {% if authors %}{% for a in authors %}
+  <author><name>{{ a }}</name></author>
+  {% endfor %}{% endif %}
+  {% if issued %}<dcterms:issued>{{ issued }}</dcterms:issued>{% endif %}
+  {% if summary %}<summary type="text">{{ summary }}</summary>{% endif %}
+  {% for c in categories %}
+  <category term="{{ c }}" scheme="tag" />
+  {% endfor %}
+
+  {% if is_dir -%}
+    <link rel="subsection" href="{{ href }}" type="application/atom+xml" />
+  {% else -%}
+    <link rel="http://opds-spec.org/acquisition" href="{{ download_href }}" type="{{ mime }}" />
+    <link rel="alternate" href="{{ stream_href }}" type="{{ mime }}" />
+    {% if thumb_href -%}
+      <link rel="http://opds-spec.org/image" href="{{ thumb_href }}" type="image/jpeg" />
+      <link rel="http://opds-spec.org/image/thumbnail" href="{{ thumb_href }}" type="image/jpeg" />
+    {% endif -%}
+    <content type="text">{{ size_str }}</content>
+  {% endif -%}
+</entry>

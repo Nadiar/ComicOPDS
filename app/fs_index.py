@@ -87,14 +87,22 @@ def scan(root: Path) -> List[Item]:
     return items
 
 def children(items: List[Item], rel_folder: str) -> Iterable[Item]:
-    prefix = (rel_folder.strip("/") + "/") if rel_folder else ""
-    depth = 0 if rel_folder == "" else rel_folder.count("/") + 1
+    """
+    Yield direct children (files or dirs) inside rel_folder.
+    Works reliably even with spaces, parentheses, and deep trees.
+    """
+    base = rel_folder.strip("/")
+    prefix = (base + "/") if base else ""
     for it in items:
-        if not it.rel.startswith(prefix):
+        rel = it.rel
+        if base == "":
+            # top-level direct children have no slash in rel
+            if "/" not in rel and rel != "":
+                yield it
             continue
-        if it.rel == rel_folder:
+        if not rel.startswith(prefix) or rel == base:
             continue
-        if it.is_dir and it.rel.count("/") == depth:
-            yield it
-        elif not it.is_dir and it.rel.count("/") == depth:
+        remainder = rel[len(prefix):]
+        # only direct children have no "/" in the remainder
+        if "/" not in remainder and remainder != "":
             yield it

@@ -153,12 +153,13 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
             return (0, it.name.lower(), 0)
         meta = it.meta or {}
         series = meta.get("series") or ""
+        # force numeric-ish, shove non-numeric to end
         try:
-            num = int(float(meta.get("number","0")))
+            num = int(float(meta.get("number", "0")))
         except ValueError:
             num = 10**9
         return (1, series.lower() or it.name.lower(), num)
-    children.sort(key=sort_key)
+
 
     start=(page-1)*PAGE_SIZE
     end=start+PAGE_SIZE
@@ -373,3 +374,9 @@ def stats(_=Depends(require_basic)):
         "top_writers": { "labels": w_labels, "values": w_values },
     }
     return JSONResponse(payload)
+
+# ---------- debug ----------
+@app.get("/debug/children", response_class=JSONResponse)
+def debug_children(path: str = ""):
+    ch = list(fs_index.children(INDEX, path.strip("/")))
+    return JSONResponse([{"rel": it.rel, "is_dir": it.is_dir, "name": it.name} for it in ch])

@@ -86,23 +86,26 @@ def scan(root: Path) -> List[Item]:
     save_cache(items)
     return items
 
-def children(items: List[Item], rel_folder: str) -> Iterable[Item]:
+def children(items: list[Item], rel_folder: str):
     """
-    Yield direct children (files or dirs) inside rel_folder.
-    Works reliably even with spaces, parentheses, and deep trees.
+    Yield direct children (files or dirs) of rel_folder.
+    Works with spaces, parentheses, and deep trees.
     """
     base = rel_folder.strip("/")
-    prefix = (base + "/") if base else ""
+    if base == "":
+        # top-level children: anything with no "/" in its rel (and not empty)
+        for it in items:
+            if it.rel and "/" not in it.rel:
+                yield it
+        return
+
+    prefix = base + "/"
+    plen = len(prefix)
     for it in items:
         rel = it.rel
-        if base == "":
-            # top-level direct children have no slash in rel
-            if "/" not in rel and rel != "":
-                yield it
-            continue
         if not rel.startswith(prefix) or rel == base:
             continue
-        remainder = rel[len(prefix):]
-        # only direct children have no "/" in the remainder
-        if "/" not in remainder and remainder != "":
+        remainder = rel[plen:]
+        # direct child has no further "/"
+        if remainder and "/" not in remainder:
             yield it

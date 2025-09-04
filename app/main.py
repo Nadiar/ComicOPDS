@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
 from fastapi.responses import StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
 from pathlib import Path
 from typing import List, Dict, Any
@@ -18,7 +18,7 @@ app = FastAPI(title="ComicOPDS")
 
 env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
-    autoescape=select_autoescape(enabled_extensions=("xml","html"))
+    autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
 
 INDEX: List[fs_index.Item] = []
@@ -233,42 +233,96 @@ def download(path: str, request: Request, _=Depends(require_basic)):
     resp.headers["Accept-Ranges"] = "bytes"
     return resp
 
-@app.get("/stream")
-def stream(path: str, request: Request, _=Depends(require_basic)):
-    p=_abspath(path)
+def _common_file_headers(p: Path) -> dict:
+    return {
+        "Accept-Ranges": "bytes",
+        "Content-Type": mime_for(p),
+        "Content-Disposition": f'inline; filename="{p.name}"',
+    }
+
+@app.head("/stream")
+def stream_head(path: str, _=Depends(require_basic)):
+    p = _abspath(path)
     if not p.exists() or not p.is_file():
         raise HTTPException(404)
-    file_size=p.stat().st_size
-    range_header=request.headers.get("range")
-    if range_header is None:
-        return FileResponse(p,media_type=mime_for(p),filename=p.name)
+    st = p.stat()
+    headers = _common_file_headers(p)
+    headers["Content-Length"] = str(st.st_size)
+    return Response(status_code=200, headers=headers)
+
+@app.get("/stream")
+def stream(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
+    """
+    Stream file with HTTP Range support.
+    - Returns 206 for valid single-range requests
+    - Returns 200 with Accept-Ranges for full-file (no Range)
+    - Ignores additional ranges if client sends multiple (serves the first)
+    """
+    p = _abspath(path)
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404)
+
+    file_size = p.stat().st_size
+    headers = _common_file_headers(p)
+
+    rng_header = range or request.headers.get("range")
+    if not rng_header:
+        # No Range ? whole file, but advertise that we support ranges
+        headers["Content-Length"] = str(file_size)
+        return FileResponse(p, headers=headers)
+
+    # Parse e.g. "bytes=START-END" (ignore multi-ranges after the first)
     try:
-        _,rng=range_header.split("=")
-        start_str,end_str=(rng.split("-")+[""])[:2]
-        start=int(start_str) if start_str else 0
-        end=int(end_str) if end_str else file_size-1
-        end=min(end,file_size-1)
-        if start>end or start<0:
+        unit, rngs = rng_header.split("=", 1)
+        if unit.strip().lower() != "bytes":
             raise ValueError
+        first_range = rngs.split(",")[0].strip()  # ignore additional ranges
+        start_str, end_str = (first_range.split("-") + [""])[:2]
+
+        if start_str == "" and end_str == "":
+            raise ValueError
+
+        if start_str == "":
+            # suffix bytes: "-N" ? last N bytes
+            length = int(end_str)
+            if length <= 0:
+                raise ValueError
+            start = max(file_size - length, 0)
+            end = file_size - 1
+        else:
+            start = int(start_str)
+            end = int(end_str) if end_str else (file_size - 1)
+
+        if start < 0 or end < start or start >= file_size:
+            raise ValueError
+
+        end = min(end, file_size - 1)
     except Exception:
-        raise HTTPException(416,"Invalid Range")
-    def iter_file(fp: Path,s:int,e:int,chunk:int=1024*1024):
+        # Malformed ? 416
+        raise HTTPException(
+            status_code=416,
+            detail="Invalid Range",
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+
+    def iter_file(fp: Path, s: int, e: int, chunk: int = 1024 * 1024):
         with fp.open("rb") as f:
             f.seek(s)
-            remaining=e-s+1
-            while remaining>0:
-                data=f.read(min(chunk,remaining))
-                if not data: break
-                remaining-=len(data)
+            remaining = e - s + 1
+            while remaining > 0:
+                data = f.read(min(chunk, remaining))
+                if not data:
+                    break
+                remaining -= len(data)
                 yield data
-    headers={
-        "Content-Range":f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges":"bytes",
-        "Content-Length":str(end-start+1),
-        "Content-Type":mime_for(p),
-        "Content-Disposition":f'inline; filename="{p.name}"',
-    }
-    return StreamingResponse(iter_file(p,start,end),status_code=206,headers=headers)
+
+    # 206 Partial Content
+    part_len = end - start + 1
+    headers.update({
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Content-Length": str(part_len),
+    })
+    return StreamingResponse(iter_file(p, start, end), status_code=206, headers=headers)
 
 @app.get("/thumb")
 def thumb(path: str, request: Request, _=Depends(require_basic)):
@@ -379,4 +433,4 @@ def stats(_=Depends(require_basic)):
 @app.get("/debug/children", response_class=JSONResponse)
 def debug_children(path: str = ""):
     ch = list(fs_index.children(INDEX, path.strip("/")))
-    return JSONResponse([{"rel": it.rel, "is_dir": it.is_dir, "name": it.name} for it in ch])
+    return [{"rel": it.rel, "is_dir": it.is_dir, "name": it.name} for it in ch]

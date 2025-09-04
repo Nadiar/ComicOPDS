@@ -24,7 +24,6 @@
       .charts { grid-template-columns: 1fr; }
     }
   </style>
-  <!-- Chart.js from CDN -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -53,57 +52,32 @@
     async function load() {
       const r = await fetch("/stats.json", { credentials: "include" });
       const data = await r.json();
-
-      // Stats
       document.getElementById("lastUpdated").textContent = new Date(data.last_updated * 1000).toLocaleString();
       document.getElementById("covers").textContent = data.total_covers;
       document.getElementById("totalComics").textContent = data.total_comics;
       document.getElementById("uniqueSeries").textContent = data.unique_series;
       document.getElementById("uniquePublishers").textContent = data.unique_publishers;
-      document.getElementById("formats").textContent = Object.entries(data.formats)
-        .map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ");
-
-      // Charts
-      const ctx1 = document.getElementById("publishersChart");
-      const pubLabels = data.publishers.labels;
-      const pubValues = data.publishers.values;
-
-      new Chart(ctx1, {
+      document.getElementById("formats").textContent = Object.entries(data.formats).map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ");
+      new Chart(document.getElementById("publishersChart"), {
         type: "doughnut",
-        data: { labels: pubLabels, datasets: [{ data: pubValues }] },
+        data: { labels: data.publishers.labels, datasets: [{ data: data.publishers.values }] },
         options: { responsive: true, plugins: { legend: { position: "bottom" } } }
       });
-
-      const ctx2 = document.getElementById("timelineChart");
-      const years = data.timeline.labels;
-      const counts = data.timeline.values;
-      new Chart(ctx2, {
+      new Chart(document.getElementById("timelineChart"), {
         type: "line",
-        data: { labels: years, datasets: [{ label: "Issues per year", data: counts, tension: 0.2 }] },
-        options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { ticks: { autoSkip: true, maxTicksLimit: 12 } } } }
+        data: { labels: data.timeline.labels, datasets: [{ label: "Issues per year", data: data.timeline.values, tension: 0.2 }] },
+        options: { responsive: true, plugins: { legend: { display: false } } }
       });
-
-      const ctx3 = document.getElementById("formatsChart");
-      const fmtLabels = Object.keys(data.formats);
-      const fmtValues = Object.values(data.formats);
-      new Chart(ctx3, {
+      const fmtLabels = Object.keys(data.formats), fmtValues = Object.values(data.formats);
+      new Chart(document.getElementById("formatsChart"), {
         type: "bar",
         data: { labels: fmtLabels, datasets: [{ label: "Files", data: fmtValues }] },
         options: { responsive: true, plugins: { legend: { display: false } } }
       });
-
-      const ctx4 = document.getElementById("writersChart");
-      const wLabels = data.top_writers.labels;
-      const wValues = data.top_writers.values;
-      new Chart(ctx4, {
+      new Chart(document.getElementById("writersChart"), {
         type: "bar",
-        data: { labels: wLabels, datasets: [{ label: "Issues", data: wValues }] },
-        options: {
-          indexAxis: "y",
-          responsive: true,
-          plugins: { legend: { display: false } },
-          scales: { x: { beginAtZero: true } }
-        }
+        data: { labels: data.top_writers.labels, datasets: [{ label: "Issues", data: data.top_writers.values }] },
+        options: { indexAxis: "y", responsive: true, plugins: { legend: { display: false } }, scales: { x: { beginAtZero: true } } }
       });
     }
     load();

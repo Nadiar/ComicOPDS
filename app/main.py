@@ -763,3 +763,15 @@ def smartlists_post(payload: list[dict], _=Depends(require_basic)):
         )
     _save_smartlists(lists)
     return JSONResponse({"ok": True, "count": len(lists)})
+    
+# ---------- Admin: reindex ----------
+@app.post("/admin/reindex", response_class=JSONResponse)
+def admin_reindex(_=Depends(require_basic)):
+    """
+    Rescan the CONTENT_BASE_DIR and rebuild the in-memory index.
+    Also refreshes the warm index file on disk (handled by fs_index.scan).
+    """
+    global INDEX
+    INDEX = fs_index.scan(LIBRARY_DIR)
+    files = sum(1 for it in INDEX if not it.is_dir)
+    return JSONResponse({"ok": True, "total_items": len(INDEX), "total_files": files})

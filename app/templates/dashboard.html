@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ComicOPDS Library Dashboard</title>
+  <title>ComicOPDS — Library Dashboard</title>
 
   <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -28,9 +28,15 @@
   <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
     <div class="container">
       <a class="navbar-brand fw-semibold" href="#"><i class="bi bi-book-half me-2"></i>ComicOPDS</a>
-      <span class="navbar-text small text-secondary">
-        <span id="lastUpdated">â€”</span> â€¢ Covers: <span id="covers">â€”</span>
-      </span>
+
+      <div class="ms-auto d-flex align-items-center gap-3">
+        <span class="navbar-text small text-secondary">
+          <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
+        </span>
+        <button id="reindexBtn" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-arrow-repeat me-1"></i> Reindex
+        </button>
+      </div>
     </div>
   </nav>
 
@@ -82,8 +88,8 @@
             <div class="metric">
               <i class="bi bi-filetype-zip"></i>
               <div>
-                <div class="value" id="formats"></div>
-		<div class="card-header fw-semibold">Formats breakdown</div>
+                <div class="value" id="formats">—</div>
+                <div class="label">Formats</div>
               </div>
             </div>
           </div>
@@ -113,7 +119,7 @@
         <div class="card h-100 chart-card">
           <div class="card-header fw-semibold">Formats breakdown</div>
           <div class="card-body"><canvas id="formatsChart"></canvas></div>
-          <div class="card-footer small footer-note">Mostly CBZ by design, but shown here.</div>
+          <div class="card-footer small footer-note">Counts by file extension (e.g., CBZ).</div>
         </div>
       </div>
 
@@ -153,6 +159,17 @@
       }
     };
 
+    // Chart registry to safely re-render on reindex
+    const charts = {};
+    function upsertChart(canvasId, config) {
+      const existing = Chart.getChart(canvasId) || charts[canvasId];
+      if (existing) existing.destroy();
+      const ctx = document.getElementById(canvasId);
+      const inst = new Chart(ctx, config);
+      charts[canvasId] = inst;
+      return inst;
+    }
+
     async function load() {
       const res = await fetch("/stats.json", { credentials: "include" });
       const data = await res.json();
@@ -168,25 +185,21 @@
         Object.entries(data.formats).map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ");
 
       // Charts
-      // 1) Publishers doughnut (sorted by share)
+      // 1) Publishers doughnut (sorted)
       const pubs = data.publishers;
-      const pubsSorted = pubs.labels.map((l,i)=>({l, v: pubs.values[i]}))
+      const pubsSorted = (pubs.labels || []).map((l,i)=>({l, v: pubs.values[i]}))
         .sort((a,b)=>b.v-a.v);
-      new Chart(document.getElementById("publishersChart"), {
+      upsertChart("publishersChart", {
         type: "doughnut",
         data: {
           labels: pubsSorted.map(x=>x.l),
           datasets: [{ data: pubsSorted.map(x=>x.v) }]
         },
-        options: {
-          ...baseOptions,
-          cutout: "60%",
-          scales: {} // none for doughnut
-        }
+        options: { ...baseOptions, cutout: "60%", scales: {} }
       });
 
-      // 2) Timeline line chart with area fill
-      new Chart(document.getElementById("timelineChart"), {
+      // 2) Timeline line (area)
+      upsertChart("timelineChart", {
         type: "line",
         data: {
           labels: data.timeline.labels,
@@ -202,28 +215,56 @@
       });
 
       // 3) Formats bar
-      const fmtLabels = Object.keys(data.formats);
-      const fmtValues = Object.values(data.formats);
-      new Chart(document.getElementById("formatsChart"), {
+      const fmtLabels = Object.keys(data.formats || {});
+      const fmtValues = Object.values(data.formats || {});
+      upsertChart("formatsChart", {
         type: "bar",
         data: { labels: fmtLabels, datasets: [{ label: "Files", data: fmtValues }] },
         options: { ...baseOptions }
       });
 
       // 4) Top writers (horizontal bar)
-      new Chart(document.getElementById("writersChart"), {
+      upsertChart("writersChart", {
         type: "bar",
         data: {
           labels: data.top_writers.labels,
           datasets: [{ label: "Issues", data: data.top_writers.values }]
         },
-        options: {
-          ...baseOptions,
-          indexAxis: "y"
-        }
+        options: { ...baseOptions, indexAxis: "y" }
       });
     }
+
+    async function reindex() {
+      const btn = document.getElementById("reindexBtn");
+      const original = btn.innerHTML;
+      try {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Reindexing…';
+        const r = await fetch("/admin/reindex", { method: "POST", credentials: "include" });
+        if (!r.ok) {
+          const msg = await r.text().catch(()=>r.statusText);
+          alert("Reindex failed: " + msg);
+          return;
+        }
+        await load(); // refresh KPIs/charts
+        btn.innerHTML = '<i class="bi bi-check2 me-1"></i> Done';
+        setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 800);
+      } catch (e) {
+        alert("Reindex error: " + (e?.message || e));
+        btn.innerHTML = original;
+        btn.disabled = false;
+      }
+    }
+
+    document.getElementById("reindexBtn").addEventListener("click", reindex);
+
+    // Initial load
     load();
+
+    // Clean up charts if the page unloads
+    window.addEventListener("beforeunload", () => {
+      Object.values(charts).forEach(c => { try { c.destroy(); } catch(_){} });
+    });
   </script>
 </body>
 </html>

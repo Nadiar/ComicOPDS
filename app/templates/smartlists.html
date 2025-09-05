@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ComicOPDS — Smart Lists</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    .group-card { border-left: 4px solid var(--bs-primary); }
+    .rule-row .form-select, .rule-row .form-control { min-width: 10rem; }
+    .monosmall { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
+    <div class="container">
+      <a class="navbar-brand fw-semibold" href="/dashboard"><i class="bi bi-book-half me-2"></i>ComicOPDS</a>
+      <div class="ms-auto small text-secondary">
+        <a class="text-decoration-none me-3" href="/opds"><i class="bi bi-rss me-1"></i>OPDS</a>
+        <a class="text-decoration-none" href="/dashboard"><i class="bi bi-speedometer2 me-1"></i>Dashboard</a>
+      </div>
+    </div>
+  </nav>
+
+  <main class="container my-4">
+    <div class="row g-3">
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">Create / Edit Smart List</div>
+          <div class="card-body">
+            <div class="mb-3">
+              <label class="form-label">List name</label>
+              <input id="listName" class="form-control" placeholder="e.g., Batman 2024"/>
+            </div>
+
+            <div id="groups" class="vstack gap-3"></div>
+            <button class="btn btn-outline-primary mt-2" id="addGroup"><i class="bi bi-plus-lg me-1"></i>Add group (OR)</button>
+
+            <hr class="my-3">
+            <div class="row g-2">
+              <div class="col-12 col-md-5">
+                <label class="form-label">Sort</label>
+                <select id="sort" class="form-select">
+                  <option value="issued_desc">Issued (newest first)</option>
+                  <option value="series_number">Series + Number</option>
+                  <option value="title">Title</option>
+                  <option value="publisher">Publisher</option>
+                </select>
+              </div>
+              <div class="col-6 col-md-3">
+                <label class="form-label">Limit</label>
+                <input id="limit" class="form-control" type="number" min="0" value="0" />
+                <div class="form-text">0 = unlimited</div>
+              </div>
+              <div class="col-6 col-md-4 d-flex align-items-end">
+                <div class="form-check mt-3">
+                  <input class="form-check-input" type="checkbox" id="distinctSeries">
+                  <label class="form-check-label" for="distinctSeries">Distinct by series (latest)</label>
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex gap-2 mt-4">
+              <button class="btn btn-primary" id="saveList"><i class="bi bi-save me-1"></i>Save list</button>
+              <button class="btn btn-outline-secondary" id="resetForm">Reset</button>
+            </div>
+
+            <div class="small text-secondary mt-3">
+              Rules within a group are <b>AND</b>’d. Groups are <b>OR</b>’d.<br>
+              Date formats: <span class="monosmall">YYYY</span>, <span class="monosmall">YYYY-MM</span>, <span class="monosmall">YYYY-MM-DD</span>.<br>
+              Fields: <span class="monosmall">series, title, number, volume, publisher, imprint, writer, characters, teams, tags, year, month, day, issued, languageiso, comicvineissue, rel, ext, size, mtime, has_thumb, has_meta</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-xl-6">
+        <div class="card h-100">
+          <div class="card-header fw-semibold">Your Smart Lists</div>
+          <div class="card-body">
+            <div id="lists" class="row g-3"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <template id="groupTpl">
+    <div class="card group-card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <div>Group (AND)</div>
+        <button class="btn btn-sm btn-outline-danger remove-group"><i class="bi bi-x-lg"></i></button>
+      </div>
+      <div class="card-body vstack gap-2 rules"></div>
+      <div class="card-footer">
+        <button class="btn btn-sm btn-outline-primary add-rule"><i class="bi bi-plus-lg me-1"></i>Add rule</button>
+      </div>
+    </div>
+  </template>
+
+  <template id="ruleTpl">
+    <div class="rule-row d-flex flex-wrap align-items-center gap-2">
+      <input class="form-check-input not-flag" type="checkbox" title="NOT">
+      <span class="text-secondary small">NOT</span>
+      <select class="form-select form-select-sm field">
+        <option>series</option><option>title</option><option>number</option><option>volume</option>
+        <option>publisher</option><option>imprint</option><option>writer</option>
+        <option>characters</option><option>teams</option><option>tags</option>
+        <option>year</option><option>month</option><option>day</option><option>issued</option>
+        <option>languageiso</option><option>comicvineissue</option>
+        <option>rel</option><option>ext</option><option>size</option><option>mtime</option>
+        <option>has_thumb</option><option>has_meta</option>
+      </select>
+      <select class="form-select form-select-sm op">
+        <option value="contains">contains</option>
+        <option value="equals">equals</option>
+        <option value="startswith">starts with</option>
+        <option value="endswith">ends with</option>
+        <option value="regex">regex</option>
+        <option value="=">= (numeric)</option><option value="!=">!= (numeric)</option>
+        <option value=">">&gt; (numeric)</option><option value=">=">&gt;= (numeric)</option>
+        <option value="<">&lt; (numeric)</option><option value="<=">&lt;= (numeric)</option>
+        <option value="on">on (date)</option><option value="before">before (date)</option><option value="after">after (date)</option>
+        <option value="between">between (date,date)</option>
+        <option value="exists">exists</option><option value="missing">missing</option>
+      </select>
+      <input class="form-control form-control-sm value" placeholder="value (leave blank for exists/missing)" />
+      <button class="btn btn-sm btn-outline-danger remove-rule"><i class="bi bi-x-lg"></i></button>
+    </div>
+  </template>
+
+  <script>
+    const listsEl = document.getElementById('lists');
+    const groupsEl = document.getElementById('groups');
+    const groupTpl = document.getElementById('groupTpl');
+    const ruleTpl = document.getElementById('ruleTpl');
+
+    function addGroup(data) {
+      const node = groupTpl.content.cloneNode(true);
+      const card = node.querySelector('.group-card');
+      const rules = node.querySelector('.rules');
+      const addBtn = node.querySelector('.add-rule');
+      const rmGroup = node.querySelector('.remove-group');
+      addBtn.onclick = () => addRule(rules);
+      rmGroup.onclick = () => card.remove();
+      groupsEl.appendChild(node);
+      (data?.rules?.length ? data.rules : [{}]).forEach(r => addRule(groupsEl.lastElementChild.querySelector('.rules'), r));
+    }
+
+    function addRule(container, data) {
+      const node = ruleTpl.content.cloneNode(true);
+      const row = node.querySelector('.rule-row');
+      if (data) {
+        row.querySelector('.not-flag').checked = !!data.not;
+        row.querySelector('.field').value = data.field || 'series';
+        row.querySelector('.op').value = data.op || 'contains';
+        row.querySelector('.value').value = data.value || '';
+      }
+      row.querySelector('.remove-rule').onclick = () => row.remove();
+      container.appendChild(node);
+    }
+
+    function readGroups() {
+      return Array.from(document.querySelectorAll('.group-card')).map(g => {
+        const rules = Array.from(g.querySelectorAll('.rule-row')).map(r => ({
+          not: r.querySelector('.not-flag').checked,
+          field: r.querySelector('.field').value,
+          op: r.querySelector('.op').value,
+          value: r.querySelector('.value').value
+        }));
+        return { rules: rules.filter(x => x.op === 'exists' || x.op === 'missing' || (x.value && x.value.trim())) };
+      }).filter(g => g.rules.length);
+    }
+
+    function resetForm() {
+      document.getElementById('listName').value = '';
+      document.getElementById('sort').value = 'issued_desc';
+      document.getElementById('limit').value = '0';
+      document.getElementById('distinctSeries').checked = false;
+      groupsEl.innerHTML = '';
+      addGroup({rules:[{field:'series',op:'contains',value:''}]});
+    }
+
+    async function loadLists() {
+      const r = await fetch('/smartlists.json', { credentials:'include' });
+      const data = await r.json();
+      listsEl.innerHTML = '';
+      data.forEach(l => {
+        const col = document.createElement('div');
+        col.className = 'col-12';
+        col.innerHTML = `
+          <div class="card h-100">
+            <div class="card-body d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-semibold">${l.name}</div>
+                <div class="small text-secondary">
+                  ${(l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' "'+r.value.replace(/"/g,'&quot;')+'"').join(' AND ')).join(' <b>OR</b> ') || '—'}
+                </div>
+                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${l.distinct_by || '—'}</div>
+                <div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/opds/smart/${l.slug}">Open in OPDS</a></div>
+              </div>
+              <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary edit">Edit</button>
+                <button class="btn btn-outline-danger delete">Delete</button>
+              </div>
+            </div>
+          </div>`;
+        col.querySelector('.edit').onclick = () => {
+          document.getElementById('listName').value = l.name;
+          document.getElementById('sort').value = l.sort || 'issued_desc';
+          document.getElementById('limit').value = l.limit || 0;
+          document.getElementById('distinctSeries').checked = (l.distinct_by === 'series');
+          groupsEl.innerHTML = '';
+          (l.groups || []).forEach(g => addGroup(g));
+        };
+        col.querySelector('.delete').onclick = async () => {
+          if (!confirm('Delete this smart list?')) return;
+          await saveLists(data.filter(x => x.slug !== l.slug));
+          await loadLists();
+        };
+        listsEl.appendChild(col);
+      });
+      return data;
+    }
+
+    async function saveLists(lists) {
+      await fetch('/smartlists.json', {
+        method: 'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+        body: JSON.stringify(lists)
+      });
+    }
+
+    document.getElementById('addGroup').onclick = () => addGroup();
+    document.getElementById('resetForm').onclick = resetForm;
+
+    document.getElementById('saveList').onclick = async () => {
+      const name = document.getElementById('listName').value.trim();
+      const groups = readGroups();
+      if (!name || groups.length === 0) { alert('Please provide a name and at least one rule.'); return; }
+      const sort = document.getElementById('sort').value;
+      const limit = parseInt(document.getElementById('limit').value || '0', 10);
+      const distinct_by = document.getElementById('distinctSeries').checked ? 'series' : '';
+
+      const lists = await loadLists();
+      const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'list');
+      const existing = lists.find(l => l.slug === slug) || lists.find(l => l.name === name);
+      const record = { name, slug, groups, sort, limit, distinct_by };
+      if (existing) Object.assign(existing, record); else lists.push(record);
+      await saveLists(lists);
+      resetForm();
+      await loadLists();
+    };
+
+    // init
+    resetForm();
+    loadLists();
+  </script>
+</body>
+</html>

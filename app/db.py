@@ -10,13 +10,23 @@ SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    """
+    Create a new connection (safe to use per-request / per-thread).
+    """
+    conn = sqlite3.connect(
+        DB_PATH,
+        check_same_thread=False,   # allow use across threads (each thread should use its own conn)
+        isolation_level=None,      # autocommit; we manage explicit BEGIN via our tx() helper
+    )
     conn.row_factory = sqlite3.Row
-    with conn:
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+    # Pragmas for concurrency + perf
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait up to 5s if DB is temporarily locked
+
+    # Ensure schema exists (idempotent)
+    conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
     return conn
 
 

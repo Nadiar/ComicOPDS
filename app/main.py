@@ -561,19 +561,19 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), _=Dep
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 @app.get("/pse/page")
-def pse_page(path: str = Query(...), page: int = Query(1, ge=1), _=Depends(require_basic)):
-    """Serve the Nth page from a CBZ as image/jpeg (cached)."""
+def pse_page(path: str = Query(...), page: int = Query(0, ge=0), _=Depends(require_basic)):
+    """Serve page by ZERO-BASED index to match Panels (0 == first page)."""
     abs_cbz = _abspath(path)
     if not abs_cbz.exists() or not abs_cbz.is_file():
         raise HTTPException(404, "Book not found")
 
     pages = _cbz_list_pages(abs_cbz)
-    if not pages or page > len(pages):
+    if not pages or page >= len(pages):
         raise HTTPException(404, "Page not found")
 
-    inner = pages[page - 1]
+    inner = pages[page] # zero-based
     cache_dir = _book_cache_dir(path)
-    dest = cache_dir / f"{page:04d}.jpg"
+    dest = cache_dir / f"{page+1:04d}.jpg"  # keep filenames 1-based 
     out = _ensure_page_jpeg(abs_cbz, inner, dest)
     return FileResponse(out, media_type="image/jpeg")
 

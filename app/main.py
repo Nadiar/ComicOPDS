@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+import logging
 from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
 from fastapi.responses import (
     StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
@@ -14,7 +14,7 @@ import os
 import re
 import json
 import zipfile
-import hashlib
+import hashlib, sys
 from PIL import Image
 from math import ceil
 
@@ -24,6 +24,19 @@ from .auth import require_basic
 from .thumbs import have_thumb, generate_thumb
 from . import db  # SQLite adapter
 
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# App logger to STDOUT
+app_logger = logging.getLogger("comicopds")
+app_logger.setLevel(LOG_LEVEL)
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+app_logger.handlers.clear()
+app_logger.addHandler(_handler)
+app_logger.propagate = False  # don't duplicate into uvicorn.error
+
+
 # -------------------- FastAPI & Jinja --------------------
 app = FastAPI(title="ComicOPDS")
 
@@ -31,6 +44,29 @@ env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent / "templates"), encoding="utf-8"),
     autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
+
+# def _mask_headers(h: dict) -> dict:
+#     masked = {}
+#     for k, v in h.items():
+#         if k.lower() in ("authorization", "cookie", "set-cookie", "x-api-key"):
+#             masked[k] = "***"
+#         else:
+#             masked[k] = v
+#     return masked
+
+# @app.middleware("http")
+# async def log_requests(request: Request, call_next):
+#     app_logger.info(f"--> {request.method} {request.url.path}?{request.url.query}")
+#     qp = dict(request.query_params)
+#     if qp:
+#         app_logger.info(f"    query: {qp}")
+#     app_logger.info(f"    headers: {_mask_headers(dict(request.headers))}")
+
+#     resp = await call_next(request)
+
+#     app_logger.info(f"<-- {request.method} {request.url.path} {resp.status_code}")
+#     return resp
+
 
 # -------------------- Index state (background) --------------------
 _INDEX_STATUS = {
@@ -277,7 +313,9 @@ def _feed(entries_xml: List[str], title: str, self_href: str,
           next_href: Optional[str] = None,
           os_total: Optional[int] = None,
           os_start: Optional[int] = None,
-          os_items: Optional[int] = None):
+          os_items: Optional[int] = None,
+          search_href: str = "/opds/v1.2/search.xml",
+          start_href_override: Optional[str] = None):
     tpl = env.get_template("feed.xml.j2")
     base = SERVER_BASE.rstrip("/")
     return tpl.render(
@@ -285,7 +323,8 @@ def _feed(entries_xml: List[str], title: str, self_href: str,
         updated=now_rfc3339(),
         title=title,
         self_href=_abs_url(self_href),
-        start_href=_abs_url("/opds"),
+        start_href=_abs_url(start_href_override or "/opds"),
+        search_href=_abs_url(search_href),
         base=base,
         next_href=_abs_url(next_href) if next_href else None,
         entries=entries_xml,
@@ -395,76 +434,51 @@ def root(_=Depends(require_basic)):
     return browse(path="", page=1)
 
 @app.get("/opds/search.xml", response_class=Response)
-def opensearch_description(_=Depends(require_basic)):
+def opensearch_compat(_=Depends(require_basic)):
+    # same doc, for clients that still hit /opds/search.xml
     tpl = env.get_template("search-description.xml.j2")
     xml = tpl.render(base=SERVER_BASE.rstrip("/"))
     return Response(content=xml, media_type="application/opensearchdescription+xml")
 
-@app.get("/opds/search", response_class=Response)
-def opds_search(q: str | None = Query(None, alias="q"),
-                page: int | None = Query(None),
-                request: Request = None,
-                _=Depends(require_basic)):
-    """
-    Panels/clients compatibility:
-    - query can be in q, query, searchTerms, term
-    - paging can be page, startPage, or startIndex (1-based or index-based)
-    """
-
-    # Collect query term across multiple names
-    qp = request.query_params if request else {}
-    term = (q or
-            qp.get("query") or
-            qp.get("searchTerms") or
-            qp.get("term") or
-            "").strip()
-
-    if not term:
-        # no query -> behave like browse root (some clients call search with empty)
-        return browse(path="", page=1)
-
-    # Resolve page number
-    # 1) explicit page (1-based)
-    if page is not None:
-        pg = max(1, int(page))
-    else:
-        # 2) startPage (1-based)
-        if "startPage" in qp:
-            try:
-                pg = max(1, int(qp.get("startPage")))
-            except Exception:
-                pg = 1
-        # 3) startIndex (0/1-based index of first result)
-        elif "startIndex" in qp:
-            try:
-                si = int(qp.get("startIndex"))
-                # Many clients use 1-based startIndex; tolerate 0-based as well
-                si = max(0, si - 1) if si > 0 else 0
-                pg = max(1, int(ceil((si + 1) / PAGE_SIZE)))
-            except Exception:
-                pg = 1
-        else:
+def _search_feed(request: Request, term: str, page_param: int | None,
+                 start_index_param: int | None, count_param: int | None):
+    qp = request.query_params
+    items = int(qp.get("count") or (count_param if count_param is not None else PAGE_SIZE))
+    items = max(1, min(items, 100))
+    if page_param is not None:
+        pg = max(1, int(page_param))
+    elif "startPage" in qp:
+        try:
+            pg = max(1, int(qp.get("startPage")))
+        except Exception:
             pg = 1
+    elif (start_index_param is not None) or ("startIndex" in qp):
+        try:
+            si = int(start_index_param if start_index_param is not None else qp.get("startIndex"))
+        except Exception:
+            si = 0
+        si = max(0, si - 1) if si > 0 else 0
+        pg = max(1, int(ceil((si + 1) / items))) if items else 1
+    else:
+        pg = 1
 
-    start = (pg - 1) * PAGE_SIZE
+    offset = (pg - 1) * items
 
-    # Query DB
     conn = db.connect()
     try:
-        rows = db.search_q(conn, term, PAGE_SIZE, start)
+        rows = db.search_q(conn, term, items, offset)
         try:
             total = db.search_count(conn, term)
         except Exception:
-            total = start + len(rows)
+            total = offset + len(rows)
     finally:
         conn.close()
 
     entries_xml = [_entry_xml_from_row(r) for r in rows]
 
-    self_href = f"/opds/search?q={quote(term)}&page={pg}"
-    next_href = None
-    if (start + len(rows)) < total:
-        next_href = f"/opds/search?q={quote(term)}&page={pg+1}"
+    # Build self/next using v1.2 path & 'query' param
+    self_href = f"/opds/v1.2/search?query={quote(term)}&page={pg}"
+    next_href = f"/opds/v1.2/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
 
     xml = _feed(
         entries_xml,
@@ -472,10 +486,34 @@ def opds_search(q: str | None = Query(None, alias="q"),
         self_href=self_href,
         next_href=next_href,
         os_total=total,
-        os_start=start + 1,     # show 1-based start index in feed metadata
-        os_items=PAGE_SIZE,
+        os_start=offset + 1 if total > 0 else 0,
+        os_items=items,
+        search_href="/opds/v1.2/search.xml",
+        start_href_override="/opds",   # keep your normal start at /opds
     )
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
+
+@app.get("/opds/v1.2/search.xml", response_class=Response)
+def opensearch_v12(_=Depends(require_basic)):
+    tpl = env.get_template("search-description.xml.j2")
+    xml = tpl.render(base=SERVER_BASE.rstrip("/"))
+    return Response(content=xml, media_type="application/opensearchdescription+xml")
+
+
+@app.get("/opds/v1.2/search", response_class=Response)
+def opds_search_v12(query: str | None = Query(None, alias="query"),
+                    page: int | None = Query(None),
+                    startIndex: int | None = Query(None),
+                    count: int | None = Query(None),
+                    request: Request = None,
+                    _=Depends(require_basic)):
+    term = (query or "").strip()
+    if not term:
+        # Some clients may call with empty query → return root catalog
+        return browse(path="", page=1)
+    return _search_feed(request, term, page, startIndex, count)
+
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
     p = (LIBRARY_DIR / rel).resolve()
@@ -802,3 +840,116 @@ def index_status(_=Depends(require_basic)):
 def admin_reindex(_=Depends(require_basic)):
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
+
+
+# Komga-style root catalog (alias)
+@app.get("/opds/v1.2/catalog", response_class=Response)
+def opds_v12_catalog(page: int = 1, _=Depends(require_basic)):
+    # identical to your root browse, just pinned under /opds/v1.2
+    path = ""
+    conn = db.connect()
+    try:
+        total = db.children_count(conn, path)
+        start = (page - 1) * PAGE_SIZE
+        rows = db.children_page(conn, path, PAGE_SIZE, start)
+    finally:
+        conn.close()
+
+    entries_xml = [_entry_xml_from_row(r) for r in rows]
+
+    # (optional) Smart Lists in page 1
+    if page == 1:
+        tpl = env.get_template("entry.xml.j2")
+        base = SERVER_BASE.rstrip("/")
+        smart_href = "/opds/smart"
+        entries_xml = [tpl.render(
+            entry_id=f"{base}{smart_href}",
+            updated=now_rfc3339(),
+            title="📁 Smart Lists",
+            is_dir=True,
+            href_abs=f"{base}{smart_href}",
+        )] + entries_xml
+
+    self_href = f"/opds/v1.2/catalog?page={page}"
+    next_href = f"/opds/v1.2/catalog?page={page+1}" if (start + PAGE_SIZE) < total else None
+    xml = _feed(
+        entries_xml,
+        title="Library",
+        self_href=self_href,
+        next_href=next_href,
+        search_href="/opds/v1.2/search.xml",      # important
+        start_href_override="/opds/v1.2/catalog", # keep “start” in v1.2 space
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
+
+
+# Komga-style OpenSearchDescription (alias)
+@app.get("/opds/v1.2/search.xml", response_class=Response)
+def opensearch_v12(_=Depends(require_basic)):
+    tpl = env.get_template("search-description.xml.j2")
+    # IMPORTANT: in the template we’ll prefer v1.2 URLs first (already done below)
+    xml = tpl.render(base=SERVER_BASE.rstrip("/"))
+    return Response(content=xml, media_type="application/opensearchdescription+xml")
+
+
+def _search_feed(request: Request, term: str, page_param: int | None,
+                 start_index_param: int | None, count_param: int | None):
+    # Resolve items per page
+    qp = request.query_params
+    items = int(qp.get("count") or (count_param if count_param is not None else PAGE_SIZE))
+    items = max(1, min(items, 100))
+
+    # Resolve page number from page/startPage or from startIndex
+    if page_param is not None:
+        pg = max(1, int(page_param))
+    elif "startPage" in qp:
+        try:
+            pg = max(1, int(qp.get("startPage")))
+        except Exception:
+            pg = 1
+    elif (start_index_param is not None) or ("startIndex" in qp):
+        try:
+            si = int(start_index_param if start_index_param is not None else qp.get("startIndex"))
+        except Exception:
+            si = 0
+        si = max(0, si - 1) if si > 0 else 0  # tolerate 1-based startIndex
+        pg = max(1, int(ceil((si + 1) / items))) if items else 1
+    else:
+        pg = 1
+
+    offset = (pg - 1) * items
+
+    # Query DB
+    conn = db.connect()
+    try:
+        rows = db.search_q(conn, term, items, offset)
+        try:
+            total = db.search_count(conn, term)
+        except Exception:
+            total = offset + len(rows)
+    finally:
+        conn.close()
+
+    entries_xml = [_entry_xml_from_row(r) for r in rows]
+
+    # Build self/next using the ACTUAL path Panels called (Komga-style or not)
+    base_path = request.url.path  # e.g., /opds/v1.2/search or /opds/search
+    # prefer 'query' on v1.2 path, otherwise 'q'
+    term_key = "query" if base_path.endswith("/v1.2/search") else "q"
+    self_href = f"{base_path}?{term_key}={quote(term)}&page={pg}"
+    next_href = None
+    if (offset + len(rows)) < total:
+        next_href = f"{base_path}?{term_key}={quote(term)}&page={pg+1}"
+
+    xml = _feed(
+        entries_xml,
+        title=f"Search: {term}",
+        self_href=self_href,
+        next_href=next_href,
+        os_total=total,
+        os_start=offset + 1 if total > 0 else 0,
+        os_items=items,
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+

@@ -3,19 +3,12 @@
   <ShortName>ComicOPDS</ShortName>
   <Description>Search your ComicOPDS library</Description>
 
-  <!-- Common variants some clients expect -->
-  <Url type="application/atom+xml"
-       template="{{ base }}/opds/search?q={searchTerms}&page={startPage?}" />
-  <Url type="application/atom+xml"
-       template="{{ base }}/opds/search?query={searchTerms}&page={startPage?}" />
-  <Url type="application/atom+xml"
-       template="{{ base }}/opds/search?q={searchTerms}&startIndex={startIndex?}" />
+  <!-- OPDS v1.2 search (both MIME variants, with rel="results") -->
+  <Url rel="results" type="application/atom+xml;profile=opds-catalog"
+       template="{{ base }}/opds/v1.2/search?query={searchTerms}&page={startPage?}" />
+  <Url rel="results" type="application/atom+xml"
+       template="{{ base }}/opds/v1.2/search?query={searchTerms}&page={startPage?}" />
 
-  <!-- With profile (others prefer this) -->
-  <Url type="application/atom+xml;profile=opds-catalog"
-       template="{{ base }}/opds/search?q={searchTerms}&page={startPage?}" />
-
-  <Query role="example" searchTerms="batman" />
   <InputEncoding>UTF-8</InputEncoding>
   <OutputEncoding>UTF-8</OutputEncoding>
 </OpenSearchDescription>

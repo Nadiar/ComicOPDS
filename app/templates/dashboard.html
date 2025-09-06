@@ -41,6 +41,26 @@
   </nav>
 
   <main class="container my-4">
+    <!-- Indexing progress (shown while running / first run) -->
+    <div id="indexProgress" class="alert alert-secondary d-none" role="alert">
+      <div class="d-flex justify-content-between">
+        <div>
+          <strong>Indexing your library…</strong>
+          <div class="small text-secondary">
+            <span id="idxPhase">indexing</span>
+            <span id="idxCounts" class="ms-2">(0 / 0)</span>
+          </div>
+          <div class="small text-secondary" id="idxCurrent"></div>
+        </div>
+        <div class="text-end">
+          <span class="badge text-bg-light" id="idxEta">—</span>
+        </div>
+      </div>
+      <div class="progress mt-2" role="progressbar" aria-label="Index progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div id="idxBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
+      </div>
+    </div>
+
     <!-- KPIs -->
     <div class="row g-3 kpis">
       <div class="col-12 col-md-6 col-xl-3">
@@ -159,7 +179,7 @@
       }
     };
 
-    // Chart registry to safely re-render on reindex
+    // Chart registry to safely re-render
     const charts = {};
     function upsertChart(canvasId, config) {
       const existing = Chart.getChart(canvasId) || charts[canvasId];
@@ -176,25 +196,22 @@
 
       // KPIs
       document.getElementById("lastUpdated").textContent =
-        new Date(data.last_updated * 1000).toLocaleString();
-      document.getElementById("covers").textContent = data.total_covers;
-      document.getElementById("totalComics").textContent = data.total_comics;
-      document.getElementById("uniqueSeries").textContent = data.unique_series;
-      document.getElementById("uniquePublishers").textContent = data.unique_publishers;
+        data.last_updated ? new Date(data.last_updated * 1000).toLocaleString() : "—";
+      document.getElementById("covers").textContent = data.total_covers ?? "0";
+      document.getElementById("totalComics").textContent = data.total_comics ?? "0";
+      document.getElementById("uniqueSeries").textContent = data.unique_series ?? "0";
+      document.getElementById("uniquePublishers").textContent = data.unique_publishers ?? "0";
+      const fmt = data.formats || {};
       document.getElementById("formats").textContent =
-        Object.entries(data.formats).map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ");
+        Object.keys(fmt).length ? Object.entries(fmt).map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ") : "—";
 
       // Charts
       // 1) Publishers doughnut (sorted)
-      const pubs = data.publishers;
-      const pubsSorted = (pubs.labels || []).map((l,i)=>({l, v: pubs.values[i]}))
-        .sort((a,b)=>b.v-a.v);
+      const pubs = data.publishers || {labels:[], values:[]};
+      const pubsSorted = (pubs.labels || []).map((l,i)=>({l, v: pubs.values[i]})).sort((a,b)=>b.v-a.v);
       upsertChart("publishersChart", {
         type: "doughnut",
-        data: {
-          labels: pubsSorted.map(x=>x.l),
-          datasets: [{ data: pubsSorted.map(x=>x.v) }]
-        },
+        data: { labels: pubsSorted.map(x=>x.l), datasets: [{ data: pubsSorted.map(x=>x.v) }] },
         options: { ...baseOptions, cutout: "60%", scales: {} }
       });
 
@@ -202,21 +219,15 @@
       upsertChart("timelineChart", {
         type: "line",
         data: {
-          labels: data.timeline.labels,
-          datasets: [{
-            label: "Issues per year",
-            data: data.timeline.values,
-            fill: true,
-            tension: 0.25,
-            pointRadius: 2
-          }]
+          labels: (data.timeline && data.timeline.labels) || [],
+          datasets: [{ label: "Issues per year", data: (data.timeline && data.timeline.values) || [], fill: true, tension: 0.25, pointRadius: 2 }]
         },
         options: { ...baseOptions }
       });
 
       // 3) Formats bar
-      const fmtLabels = Object.keys(data.formats || {});
-      const fmtValues = Object.values(data.formats || {});
+      const fmtLabels = Object.keys(fmt);
+      const fmtValues = Object.values(fmt);
       upsertChart("formatsChart", {
         type: "bar",
         data: { labels: fmtLabels, datasets: [{ label: "Files", data: fmtValues }] },
@@ -224,15 +235,79 @@
       });
 
       // 4) Top writers (horizontal bar)
+      const tw = data.top_writers || {labels:[], values:[]};
       upsertChart("writersChart", {
         type: "bar",
-        data: {
-          labels: data.top_writers.labels,
-          datasets: [{ label: "Issues", data: data.top_writers.values }]
-        },
+        data: { labels: tw.labels, datasets: [{ label: "Issues", data: tw.values }] },
         options: { ...baseOptions, indexAxis: "y" }
       });
     }
+
+    // Progress bar UI
+    function showProgressUI(s) {
+      const box = document.getElementById("indexProgress");
+      if (s.running || (!s.usable && s.phase !== "idle")) {
+        box.classList.remove("d-none");
+        const done = s.done || 0, total = Math.max(s.total || 0, 1);
+        const pct = Math.min(100, Math.floor((done / total) * 100));
+        document.getElementById("idxPhase").textContent = s.phase || "indexing";
+        document.getElementById("idxCounts").textContent = `(${done} / ${s.total || 0})`;
+        document.getElementById("idxCurrent").textContent = s.current || "";
+        const bar = document.getElementById("idxBar");
+        bar.style.width = pct + "%";
+        bar.setAttribute("aria-valuenow", pct);
+        // naive ETA
+        let eta = "—";
+        if (s.started_at && done > 5 && total > done) {
+          const elapsed = (Date.now()/1000 - s.started_at);
+          const per = elapsed / done;
+          const secs = Math.round(per * (total - done));
+          const m = Math.floor(secs/60), sec = secs%60;
+          eta = `~${m}m ${sec}s left`;
+        }
+        document.getElementById("idxEta").textContent = eta;
+      } else {
+        box.classList.add("d-none");
+      }
+    }
+
+    let lastIdxStatus = null;
+
+    function shouldRefreshCharts(newStatus, oldStatus) {
+      if (!newStatus) return false;
+      // Only refresh when we go from running -> idle, or ended_at changes
+      if (!oldStatus) return (!newStatus.running && newStatus.usable);
+      const finishedNow = (oldStatus.running && !newStatus.running);
+      const endedChanged = (newStatus.ended_at && newStatus.ended_at !== oldStatus.ended_at);
+      const becameUsable = (!oldStatus.usable && newStatus.usable);
+      return finishedNow || endedChanged || becameUsable;
+    }
+
+    async function pollIndex() {
+      let nextDelay = 5000; // idle default
+      try {
+        const r = await fetch("/index/status", { credentials: "include", cache: "no-store" });
+        const s = await r.json();
+        showProgressUI(s);
+
+        if (shouldRefreshCharts(s, lastIdxStatus)) {
+          await load(); // fetch /stats.json once on transition
+        }
+
+        // While running, poll faster; when idle, slower
+        nextDelay = s.running ? 800 : 5000;
+        lastIdxStatus = s;
+      } catch (_) {
+        nextDelay = 5000;
+      } finally {
+        setTimeout(pollIndex, nextDelay);
+      }
+    }
+
+    document.getElementById("reindexBtn").addEventListener("click", reindex);
+
+    // Start polling; charts render when indexing first completes (or immediately if already idle & usable)
+    pollIndex();
 
     async function reindex() {
       const btn = document.getElementById("reindexBtn");
@@ -244,10 +319,7 @@
         if (!r.ok) {
           const msg = await r.text().catch(()=>r.statusText);
           alert("Reindex failed: " + msg);
-          return;
         }
-        await load(); // refresh KPIs/charts
-        btn.innerHTML = '<i class="bi bi-check2 me-1"></i> Done';
         setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 800);
       } catch (e) {
         alert("Reindex error: " + (e?.message || e));
@@ -258,8 +330,8 @@
 
     document.getElementById("reindexBtn").addEventListener("click", reindex);
 
-    // Initial load
-    load();
+    // start polling; charts will render when index is ready/idle
+    pollIndex();
 
     // Clean up charts if the page unloads
     window.addEventListener("beforeunload", () => {

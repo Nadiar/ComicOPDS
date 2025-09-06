@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
 from fastapi.responses import (
     StreamingResponse,
@@ -11,13 +13,13 @@ from typing import List, Dict, Any, Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from urllib.parse import quote
 from collections import Counter
-import os
+import threading
+import time
 import re
 import json
-import math
 import datetime as dt
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, ENABLE_WATCH
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX
 from . import fs_index
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
@@ -25,26 +27,80 @@ from .thumbs import have_thumb, generate_thumb
 
 app = FastAPI(title="ComicOPDS")
 
-# IMPORTANT: include ".j2" so everything is auto-escaped (fixes & in titles, etc.)
+# Jinja: force UTF-8 + auto-escape .xml/.html/.j2
 env = Environment(
-    loader=FileSystemLoader(str(Path(__file__).parent / "templates")),
+    loader=FileSystemLoader(str(Path(__file__).parent / "templates"), encoding="utf-8"),
     autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
 
+# -------------------- Index state (background) --------------------
 INDEX: List[fs_index.Item] = []
+_INDEX_LOCK = threading.Lock()
+_INDEX_STATUS = {
+    "running": False,
+    "phase": "idle",      # "counting" | "indexing" | "idle"
+    "total": 0,
+    "done": 0,
+    "current": "",
+    "started_at": 0.0,
+    "ended_at": 0.0,
+}
+
 
 def _abs_path(p: str) -> str:
+    """URL prefix helper"""
     return (URL_PREFIX + p) if URL_PREFIX else p
 
+
+def _count_target_files(root: Path) -> int:
+    exts = {".cbz"}
+    n = 0
+    for p in root.rglob("*"):
+        if p.is_file() and p.suffix.lower() in exts:
+            n += 1
+    return n
+
+
+def _set_status(**kw):
+    _INDEX_STATUS.update(kw)
+
+
+def _index_progress_tick(info: dict):
+    _INDEX_STATUS["done"] += 1
+    _INDEX_STATUS["current"] = info.get("rel") or ""
+
+
+def _run_indexing():
+    global INDEX
+    try:
+        _set_status(running=True, phase="counting", done=0, total=0, current="", started_at=time.time(), ended_at=0.0)
+        total = _count_target_files(LIBRARY_DIR)
+        _set_status(total=total, phase="indexing")
+        items = fs_index.scan(LIBRARY_DIR, progress_cb=_index_progress_tick)
+        with _INDEX_LOCK:
+            INDEX = items
+        _set_status(phase="idle", running=False, ended_at=time.time(), current="")
+    except Exception:
+        _set_status(phase="idle", running=False, ended_at=time.time())
+
+
+def _start_indexing_if_needed(force=False):
+    if not force and _INDEX_STATUS["running"]:
+        return
+    if not force and INDEX:
+        return
+    t = threading.Thread(target=_run_indexing, daemon=True)
+    t.start()
+
+
 @app.on_event("startup")
-def build_index():
+def startup():
     if not LIBRARY_DIR.exists():
         raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
-    global INDEX
-    INDEX = fs_index.scan(LIBRARY_DIR)
+    _start_indexing_if_needed(force=True)
 
 
-# ---------- OPDS helpers ----------
+# -------------------- OPDS helpers --------------------
 def _display_title(item: fs_index.Item) -> str:
     m = item.meta or {}
     series, number, volume = m.get("series"), m.get("number"), m.get("volume")
@@ -54,6 +110,7 @@ def _display_title(item: fs_index.Item) -> str:
         suffix = f" — {title}" if title and title != series else ""
         return f"{series}{vol} #{number}{suffix}"
     return title
+
 
 def _authors_from_meta(meta: dict) -> list[str]:
     authors = []
@@ -70,6 +127,7 @@ def _authors_from_meta(meta: dict) -> list[str]:
         out.append(a)
     return out
 
+
 def _issued_from_meta(meta: dict) -> Optional[str]:
     y = meta.get("year")
     if not y:
@@ -80,6 +138,7 @@ def _issued_from_meta(meta: dict) -> Optional[str]:
         return f"{int(y):04d}-{m:02d}-{d:02d}"
     except Exception:
         return None
+
 
 def _categories_from_meta(meta: dict) -> list[str]:
     cats = []
@@ -97,6 +156,7 @@ def _categories_from_meta(meta: dict) -> list[str]:
         out.append(c)
     return out
 
+
 def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optional[str] = None):
     tpl = env.get_template("feed.xml.j2")
     base = SERVER_BASE.rstrip("/")
@@ -111,6 +171,7 @@ def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optiona
         entries=entries_xml,
     )
 
+
 def _entry_xml(item: fs_index.Item) -> str:
     tpl = env.get_template("entry.xml.j2")
     if item.is_dir:
@@ -124,7 +185,7 @@ def _entry_xml(item: fs_index.Item) -> str:
         )
     else:
         download_href = f"/download?path={quote(item.rel)}"
-        stream_href = f"/stream?path={quote(item.rel)}"  # we still provide it; most clients use /download
+        stream_href = f"/stream?path={quote(item.rel)}"
         meta = item.meta or {}
         comicvine_issue = meta.get("comicvineissue")
 
@@ -153,17 +214,18 @@ def _entry_xml(item: fs_index.Item) -> str:
         )
 
 
-# ---------- core routes (OPDS browsing/search) ----------
+# -------------------- Core routes --------------------
 @app.get("/healthz")
 def health():
     return PlainTextResponse("ok")
+
 
 @app.get("/opds", response_class=Response)
 def browse(path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
     path = path.strip("/")
     children = list(fs_index.children(INDEX, path))
 
-    # Sort: dirs first by name; files by series + number when present
+    # Sort: dirs first; files by series + number
     def sort_key(it: fs_index.Item):
         if it.is_dir:
             return (0, it.name.lower(), 0)
@@ -182,7 +244,7 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
     page_items = children[start:end]
     entries_xml = [_entry_xml(it) for it in page_items]
 
-    # Inject "Smart Lists" virtual folder at root page 1
+    # "Smart Lists" virtual folder at root page 1
     if path == "" and page == 1:
         tpl = env.get_template("entry.xml.j2")
         smart_href = _abs_path("/opds/smart")
@@ -196,21 +258,22 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
         entries_xml = [smart_entry] + entries_xml
 
     self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
-    next_href = None
-    if end < len(children):
-        next_href = f"/opds?path={quote(path)}&page={page+1}" if path else f"/opds?page={page+1}"
+    next_href = f"/opds?path={quote(path)}&page={page+1}" if end < len(children) else None
     xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
 
 @app.get("/", response_class=Response)
 def root(_=Depends(require_basic)):
     return browse(path="", page=1)
+
 
 @app.get("/opds/search.xml", response_class=Response)
 def opensearch_description(_=Depends(require_basic)):
     tpl = env.get_template("search-description.xml.j2")
     xml = tpl.render(base=SERVER_BASE.rstrip("/"))
     return Response(content=xml, media_type="application/opensearchdescription+xml")
+
 
 @app.get("/opds/search", response_class=Response)
 def opds_search(q: str = Query("", alias="q"), page: int = 1, _=Depends(require_basic)):
@@ -235,12 +298,13 @@ def opds_search(q: str = Query("", alias="q"), page: int = 1, _=Depends(require_
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 
-# ---------- file endpoints (download/stream/thumb) ----------
+# -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
     p = (LIBRARY_DIR / rel).resolve()
     if LIBRARY_DIR not in p.parents and p != LIBRARY_DIR:
         raise HTTPException(400, "Invalid path")
     return p
+
 
 def _common_file_headers(p: Path) -> dict:
     return {
@@ -248,6 +312,7 @@ def _common_file_headers(p: Path) -> dict:
         "Content-Type": mime_for(p),
         "Content-Disposition": f'inline; filename="{p.name}"',
     }
+
 
 @app.head("/download")
 def download_head(path: str, _=Depends(require_basic)):
@@ -258,6 +323,7 @@ def download_head(path: str, _=Depends(require_basic)):
     headers = _common_file_headers(p)
     headers["Content-Length"] = str(st.st_size)
     return Response(status_code=200, headers=headers)
+
 
 @app.get("/download")
 def download(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
@@ -322,6 +388,7 @@ def download(path: str, request: Request, range: str | None = Header(default=Non
     })
     return StreamingResponse(iter_file(p, start, end), status_code=206, headers=headers)
 
+
 @app.head("/stream")
 def stream_head(path: str, _=Depends(require_basic)):
     p = _abspath(path)
@@ -332,10 +399,12 @@ def stream_head(path: str, _=Depends(require_basic)):
     headers["Content-Length"] = str(st.st_size)
     return Response(status_code=200, headers=headers)
 
+
 @app.get("/stream")
 def stream(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
     # Alias of download with Range support (Panels uses /download)
     return download(path=path, request=request, range=range)
+
 
 @app.get("/thumb")
 def thumb(path: str, _=Depends(require_basic)):
@@ -352,11 +421,12 @@ def thumb(path: str, _=Depends(require_basic)):
     return FileResponse(p, media_type="image/jpeg")
 
 
-# ---------- Dashboard & stats ----------
+# -------------------- Dashboard & stats --------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(_=Depends(require_basic)):
     tpl = env.get_template("dashboard.html")
     return HTMLResponse(tpl.render())
+
 
 @app.get("/stats.json", response_class=JSONResponse)
 def stats(_=Depends(require_basic)):
@@ -366,7 +436,7 @@ def stats(_=Depends(require_basic)):
     publishers = Counter()
     formats = Counter()
     writers = Counter()
-    timeline = Counter()  # year -> count
+    timeline = Counter()
     last_updated = 0.0
 
     for it in files:
@@ -401,7 +471,7 @@ def stats(_=Depends(require_basic)):
         pub_labels = [k for k, _ in top]
         pub_values = [v for _, v in top]
         if other:
-            pub_labels.append("Other")
+            #pub_labels.append("Other")
             pub_values.append(other)
 
     years = sorted(timeline.keys())
@@ -417,7 +487,7 @@ def stats(_=Depends(require_basic)):
         "total_comics": total_comics,
         "unique_series": len(series_set),
         "unique_publishers": len(publishers),
-        "formats": dict(formats) or {"cbz": 0},  
+        "formats": dict(formats) or {"cbz": 0},
         "publishers": {"labels": pub_labels, "values": pub_values},
         "timeline": {"labels": years, "values": year_values},
         "top_writers": {"labels": w_labels, "values": w_values},
@@ -425,7 +495,7 @@ def stats(_=Depends(require_basic)):
     return JSONResponse(payload)
 
 
-# ---------- Debug helper ----------
+# -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
 def debug_children(path: str = ""):
     ch = list(fs_index.children(INDEX, path.strip("/")))
@@ -434,12 +504,14 @@ def debug_children(path: str = ""):
     )
 
 
-# ---------- Smart Lists (advanced) ----------
+# -------------------- Smart Lists (advanced) --------------------
 SMARTLISTS_PATH = Path("/data/smartlists.json")
+
 
 def _slugify(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
     return slug or "list"
+
 
 def _load_smartlists() -> list[dict]:
     if SMARTLISTS_PATH.exists():
@@ -449,9 +521,11 @@ def _load_smartlists() -> list[dict]:
             return []
     return []
 
+
 def _save_smartlists(lists: list[dict]) -> None:
     SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SMARTLISTS_PATH.write_text(json.dumps(lists, ensure_ascii=False, indent=0), encoding="utf-8")
+
 
 def _issued_tuple(meta: dict) -> Optional[tuple[int, int, int]]:
     y = meta.get("year")
@@ -461,6 +535,7 @@ def _issued_tuple(meta: dict) -> Optional[tuple[int, int, int]]:
         return (int(y), int(meta.get("month") or 1), int(meta.get("day") or 1))
     except Exception:
         return None
+
 
 def _get_field_value(it: fs_index.Item, field: str):
     f = (field or "").lower()
@@ -492,11 +567,13 @@ def _get_field_value(it: fs_index.Item, field: str):
     if f == "has_meta": return bool(m)
     return None
 
+
 def _to_float(x) -> Optional[float]:
     try:
         return float(str(x))
     except Exception:
         return None
+
 
 def _to_date(s: str) -> Optional[dt.date]:
     s = (s or "").strip()
@@ -514,6 +591,7 @@ def _to_date(s: str) -> Optional[dt.date]:
         return None
     return None
 
+
 def _val_to_date(val) -> Optional[dt.date]:
     if isinstance(val, (int, float)):
         try:
@@ -523,6 +601,7 @@ def _val_to_date(val) -> Optional[dt.date]:
     if isinstance(val, str):
         return _to_date(val)
     return None
+
 
 def _rule_true(it: fs_index.Item, r: dict) -> bool:
     field = (r.get("field") or "").lower()
@@ -608,6 +687,7 @@ def _rule_true(it: fs_index.Item, r: dict) -> bool:
         )
     return (not result) if negate else result
 
+
 def _matches_groups(it: fs_index.Item, groups: list[dict]) -> bool:
     valid_groups = [g for g in (groups or []) if g.get("rules")]
     if not valid_groups:
@@ -617,6 +697,7 @@ def _matches_groups(it: fs_index.Item, groups: list[dict]) -> bool:
         if all(_rule_true(it, r) for r in rules):
             return True
     return False
+
 
 def _sort_key(item: fs_index.Item, name: str):
     n = (name or "").lower()
@@ -637,8 +718,10 @@ def _sort_key(item: fs_index.Item, name: str):
         return ((m.get("publisher") or "").lower(), (m.get("series") or "").lower())
     return ((item.name or "").lower(),)
 
+
 def _distinct_latest_by_series(items: list[fs_index.Item]) -> list[fs_index.Item]:
     best: Dict[str, fs_index.Item] = {}
+
     def rank(x: fs_index.Item):
         m = x.meta or {}
         t = _issued_tuple(m) or (0, 0, 0)
@@ -647,6 +730,7 @@ def _distinct_latest_by_series(items: list[fs_index.Item]) -> list[fs_index.Item
         except ValueError:
             num = -1
         return (t[0], t[1], t[2], num)
+
     for it in items:
         series = (it.meta or {}).get("series")
         if not series:
@@ -659,7 +743,6 @@ def _distinct_latest_by_series(items: list[fs_index.Item]) -> list[fs_index.Item
     return list(best.values()) + no_series
 
 
-# OPDS Smart Lists navigation & feeds
 @app.get("/opds/smart", response_class=Response)
 def opds_smart_lists(_=Depends(require_basic)):
     lists = _load_smartlists()
@@ -678,6 +761,7 @@ def opds_smart_lists(_=Depends(require_basic)):
         )
     xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
 
 @app.get("/opds/smart/{slug}", response_class=Response)
 def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
@@ -711,15 +795,16 @@ def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 
-# Smart Lists HTML & JSON API
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):
     tpl = env.get_template("smartlists.html")
     return HTMLResponse(tpl.render())
 
+
 @app.get("/smartlists.json", response_class=JSONResponse)
 def smartlists_get(_=Depends(require_basic)):
     return JSONResponse(_load_smartlists())
+
 
 @app.post("/smartlists.json", response_class=JSONResponse)
 def smartlists_post(payload: list[dict], _=Depends(require_basic)):
@@ -763,15 +848,16 @@ def smartlists_post(payload: list[dict], _=Depends(require_basic)):
         )
     _save_smartlists(lists)
     return JSONResponse({"ok": True, "count": len(lists)})
-    
-# ---------- Admin: reindex ----------
+
+
+# -------------------- Index status + Reindex --------------------
+@app.get("/index/status", response_class=JSONResponse)
+def index_status(_=Depends(require_basic)):
+    usable = bool(INDEX)
+    return JSONResponse({**_INDEX_STATUS, "usable": usable})
+
+
 @app.post("/admin/reindex", response_class=JSONResponse)
 def admin_reindex(_=Depends(require_basic)):
-    """
-    Rescan the CONTENT_BASE_DIR and rebuild the in-memory index.
-    Also refreshes the warm index file on disk (handled by fs_index.scan).
-    """
-    global INDEX
-    INDEX = fs_index.scan(LIBRARY_DIR)
-    files = sum(1 for it in INDEX if not it.is_dir)
-    return JSONResponse({"ok": True, "total_items": len(INDEX), "total_files": files})
+    _start_indexing_if_needed(force=True)
+    return JSONResponse({"ok": True, "started": True})

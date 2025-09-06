@@ -6,11 +6,12 @@ services:
     environment:
       CONTENT_BASE_DIR: /library
       PAGE_SIZE: "50"
-      #SERVER_BASE: "https://comics.example.com"   # <- set to your public domain
+      SERVER_BASE: "http://192.168.10.109:8382"   # <- set to your public domain
       URL_PREFIX: ""                               # or "/comics" if served under a subpath
       OPDS_BASIC_USER: "admin"
       OPDS_BASIC_PASS: "change-me"
       ENABLE_WATCH: "false"                         # true/false (not 1/0)
+      AUTO_INDEX_ON_START: "false"
     volumes:
-      - "/mnt/disk1/Comics/ComicRack/Oni Press:/library:ro"
+      - "/mnt/disk1/Comics/ComicRack/:/library:ro"
       - ./data:/data

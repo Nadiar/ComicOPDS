@@ -13,13 +13,15 @@ import time
 import os
 import re
 import json
+import zipfile
+import hashlib
+from PIL import Image
 
 from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
 from .thumbs import have_thumb, generate_thumb
 from . import db  # SQLite adapter
-
 
 # -------------------- FastAPI & Jinja --------------------
 app = FastAPI(title="ComicOPDS")
@@ -28,7 +30,6 @@ env = Environment(
     loader=FileSystemLoader(str(Path(__file__).parent / "templates"), encoding="utf-8"),
     autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
-
 
 # -------------------- Index state (background) --------------------
 _INDEX_STATUS = {
@@ -42,6 +43,7 @@ _INDEX_STATUS = {
 }
 _INDEX_LOCK = threading.Lock()
 
+AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() not in ("0","false","no","off")
 
 # -------------------- Small helpers --------------------
 def rget(row, key: str, default=None):
@@ -52,15 +54,11 @@ def rget(row, key: str, default=None):
     except Exception:
         return default
 
-
 def _abs_url(p: str) -> str:
-    """Apply URL_PREFIX (if any)."""
     return (URL_PREFIX + p) if URL_PREFIX else p
-
 
 def _set_status(**kw):
     _INDEX_STATUS.update(kw)
-
 
 def _count_cbz(root: Path) -> int:
     n = 0
@@ -69,14 +67,11 @@ def _count_cbz(root: Path) -> int:
             n += 1
     return n
 
-
 def _parent_rel(rel: str) -> str:
     return "" if "/" not in rel else rel.rsplit("/", 1)[0]
 
-
 def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
     """Lightweight ComicInfo.xml reader."""
-    import zipfile
     from xml.etree import ElementTree as ET
     meta: Dict[str, Any] = {}
     try:
@@ -105,11 +100,9 @@ def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
         pass
     return meta
 
-
 def _index_progress(rel: str):
     _INDEX_STATUS["done"] += 1
     _INDEX_STATUS["current"] = rel
-
 
 def _run_scan():
     """Background scanner thread: writes into SQLite using its own connection."""
@@ -164,20 +157,66 @@ def _run_scan():
         except Exception:
             pass
 
-
 def _start_scan(force=False):
     if not force and _INDEX_STATUS["running"]:
         return
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
-
 @app.on_event("startup")
 def startup():
     if not LIBRARY_DIR.exists():
         raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
-    _start_scan(force=True)
 
+    if AUTO_INDEX_ON_START:
+        _start_scan(force=True)
+        return
+
+    # Skip auto-index if DB already has rows
+    conn = db.connect()
+    try:
+        has_any = conn.execute("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+    if not has_any:
+        _start_scan(force=True)
+    else:
+        _set_status(running=False, phase="idle", total=0, done=0, current="", ended_at=time.time())
+
+# -------------------- PSE (Page Streaming) helpers --------------------
+PAGE_CACHE_DIR = Path("/data/pages")
+VALID_PAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
+
+def _cbz_list_pages(cbz_path: Path) -> list[str]:
+    with zipfile.ZipFile(cbz_path, "r") as zf:
+        names = [n for n in zf.namelist() if Path(n).suffix.lower() in VALID_PAGE_EXTS and not n.endswith("/")]
+    # natural sort
+    import re as _re
+    def natkey(s: str):
+        return [int(t) if t.isdigit() else t.lower() for t in _re.split(r"(\d+)", s)]
+    names.sort(key=natkey)
+    return names
+
+def _book_cache_dir(rel_path: str) -> Path:
+    h = hashlib.sha1(rel_path.encode("utf-8")).hexdigest()
+    d = PAGE_CACHE_DIR / h
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _ensure_page_jpeg(cbz_path: Path, inner_name: str, dest: Path) -> Path:
+    if dest.exists():
+        return dest
+    with zipfile.ZipFile(cbz_path, "r") as zf:
+        with zf.open(inner_name) as fp:
+            im = Image.open(fp)
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            elif im.mode == "L":
+                im = im.convert("RGB")
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            im.save(dest, format="JPEG", quality=90, optimize=True)
+    return dest
 
 # -------------------- OPDS helpers (templating) --------------------
 def _display_title(row) -> str:
@@ -191,13 +230,11 @@ def _display_title(row) -> str:
         return f"{series}{vol} #{number}{suffix}"
     return title
 
-
 def _authors_from_row(row) -> list[str]:
     authors = []
     v = rget(row, "writer")
     if v:
         authors.extend([x.strip() for x in v.split(",") if x.strip()])
-    # de-dup
     seen = set()
     out = []
     for a in authors:
@@ -207,7 +244,6 @@ def _authors_from_row(row) -> list[str]:
         seen.add(la)
         out.append(a)
     return out
-
 
 def _issued_from_row(row) -> Optional[str]:
     y = rget(row, "year")
@@ -219,7 +255,6 @@ def _issued_from_row(row) -> Optional[str]:
         return f"{int(y):04d}-{m:02d}-{d:02d}"
     except Exception:
         return None
-
 
 def _categories_from_row(row) -> list[str]:
     cats = []
@@ -237,7 +272,6 @@ def _categories_from_row(row) -> list[str]:
         out.append(c)
     return out
 
-
 def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optional[str] = None):
     tpl = env.get_template("feed.xml.j2")
     base = SERVER_BASE.rstrip("/")
@@ -252,52 +286,68 @@ def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optiona
         entries=entries_xml,
     )
 
-
 def _entry_xml_from_row(row) -> str:
     tpl = env.get_template("entry.xml.j2")
+    base = SERVER_BASE.rstrip("/")
+
     if row["is_dir"]:
         href = f"/opds?path={quote(row['rel'])}" if row["rel"] else "/opds"
         return tpl.render(
-            entry_id=f"{SERVER_BASE.rstrip('/')}{_abs_url('/opds/' + quote(row['rel']))}",
+            entry_id=f"{base}{_abs_url('/opds/' + quote(row['rel']))}",
             updated=now_rfc3339(),
             title=row["name"] or "/",
             is_dir=True,
-            href=_abs_url(href),
+            href_abs=f"{base}{_abs_url(href)}",
         )
     else:
         rel = row["rel"]
+        abs_file = LIBRARY_DIR / rel
+
         download_href = f"/download?path={quote(rel)}"
         stream_href = f"/stream?path={quote(rel)}"
 
+        # PSE: template URL & count (Komga-style)
+        pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
+        page_count = 0
+        try:
+            if abs_file.exists():
+                page_count = len(_cbz_list_pages(abs_file))
+        except Exception:
+            page_count = 0
+
         comicvine_issue = rget(row, "comicvineissue")
-        thumb_href = None
+        thumb_href_abs = None
+        image_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, (LIBRARY_DIR / rel), comicvine_issue)
+            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
             if p:
-                thumb_href = f"/thumb?path={quote(rel)}"
+                # we’ll use the same image for both full image and thumbnail rels
+                image_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
+                thumb_href_abs = image_abs
 
         return tpl.render(
-            entry_id=f"{SERVER_BASE.rstrip('/')}{_abs_url(download_href)}",
+            entry_id=f"{base}{_abs_url(download_href)}",
             updated=now_rfc3339(),
             title=_display_title(row),
             is_dir=False,
-            download_href=_abs_url(download_href),
-            stream_href=_abs_url(stream_href),
-            mime=mime_for(LIBRARY_DIR / rel),
+            download_href_abs=f"{base}{_abs_url(download_href)}",
+            stream_href_abs=f"{base}{_abs_url(stream_href)}",
+            pse_template_abs=f"{base}{_abs_url(pse_template)}",
+            page_count=page_count,
+            mime=mime_for(abs_file),
             size_str=f"{row['size']} bytes",
-            thumb_href=_abs_url("/thumb?path=" + quote(rel)) if thumb_href else None,
+            thumb_href_abs=thumb_href_abs,
+            image_abs=image_abs,
             authors=_authors_from_row(row),
             issued=_issued_from_row(row),
             summary=(rget(row, "summary") or None),
             categories=_categories_from_row(row),
         )
 
-
 # -------------------- Routes --------------------
 @app.get("/healthz")
 def health():
     return PlainTextResponse("ok")
-
 
 @app.get("/opds", response_class=Response)
 def browse(path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
@@ -315,13 +365,14 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
     # "Smart Lists" virtual folder at root/page 1
     if path == "" and page == 1:
         tpl = env.get_template("entry.xml.j2")
+        base = SERVER_BASE.rstrip("/")
         smart_href = _abs_url("/opds/smart")
         smart_entry = tpl.render(
-            entry_id=f"{SERVER_BASE.rstrip('/')}{smart_href}",
+            entry_id=f"{base}{smart_href}",
             updated=now_rfc3339(),
             title="📁 Smart Lists",
             is_dir=True,
-            href=smart_href,
+            href_abs=f"{base}{smart_href}",
         )
         entries_xml = [smart_entry] + entries_xml
 
@@ -330,18 +381,15 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
     xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
-
 @app.get("/", response_class=Response)
 def root(_=Depends(require_basic)):
     return browse(path="", page=1)
-
 
 @app.get("/opds/search.xml", response_class=Response)
 def opensearch_description(_=Depends(require_basic)):
     tpl = env.get_template("search-description.xml.j2")
     xml = tpl.render(base=SERVER_BASE.rstrip("/"))
     return Response(content=xml, media_type="application/opensearchdescription+xml")
-
 
 @app.get("/opds/search", response_class=Response)
 def opds_search(q: str = Query("", alias="q"), page: int = 1, _=Depends(require_basic)):
@@ -362,7 +410,6 @@ def opds_search(q: str = Query("", alias="q"), page: int = 1, _=Depends(require_
     xml = _feed(entries_xml, title=f"Search: {q_str}", self_href=self_href, next_href=next_href)
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
-
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
     p = (LIBRARY_DIR / rel).resolve()
@@ -370,14 +417,12 @@ def _abspath(rel: str) -> Path:
         raise HTTPException(400, "Invalid path")
     return p
 
-
 def _common_file_headers(p: Path) -> dict:
     return {
         "Accept-Ranges": "bytes",
         "Content-Type": mime_for(p),
         "Content-Disposition": f'inline; filename="{p.name}"',
     }
-
 
 @app.head("/download")
 def download_head(path: str, _=Depends(require_basic)):
@@ -388,7 +433,6 @@ def download_head(path: str, _=Depends(require_basic)):
     headers = _common_file_headers(p)
     headers["Content-Length"] = str(st.st_size)
     return Response(status_code=200, headers=headers)
-
 
 @app.get("/download")
 def download(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
@@ -415,7 +459,6 @@ def download(path: str, request: Request, range: str | None = Header(default=Non
             raise ValueError
 
         if start_str == "":
-            # suffix-byte-range-spec: "-N"
             length = int(end_str)
             if length <= 0:
                 raise ValueError
@@ -454,17 +497,13 @@ def download(path: str, request: Request, range: str | None = Header(default=Non
     })
     return StreamingResponse(iter_file(p, start, end), status_code=206, headers=headers)
 
-
 @app.head("/stream")
 def stream_head(path: str, _=Depends(require_basic)):
     return download_head(path)
 
-
 @app.get("/stream")
 def stream(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
-    # Alias of download with Range support (Panels tends to use /download)
     return download(path=path, request=request, range=range)
-
 
 @app.get("/thumb")
 def thumb(path: str, _=Depends(require_basic)):
@@ -487,13 +526,62 @@ def thumb(path: str, _=Depends(require_basic)):
         raise HTTPException(404, "No thumbnail")
     return FileResponse(p, media_type="image/jpeg")
 
+# -------------------- PSE endpoints --------------------
+@app.get("/pse/stream", response_class=Response)
+def pse_stream(path: str = Query(..., description="Relative path to CBZ"), _=Depends(require_basic)):
+    """Optional: Atom feed per-pages (kept for compatibility)."""
+    abs_cbz = _abspath(path)
+    if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
+        raise HTTPException(404, "Book not found")
+
+    pages = _cbz_list_pages(abs_cbz)
+    page_entry_tpl = env.get_template("pse_page_entry.xml.j2")
+    entries_xml = []
+    for i, _name in enumerate(pages, start=1):
+        page_href = _abs_url(f"/pse/page?path={quote(path)}&page={i}")
+        entries_xml.append(
+            page_entry_tpl.render(
+                entry_id=f"{SERVER_BASE.rstrip('/')}{page_href}",
+                updated=now_rfc3339(),
+                title=f"Page {i}",
+                page_href=page_href,
+            )
+        )
+
+    pse_feed_tpl = env.get_template("pse_feed.xml.j2")
+    self_href = f"/pse/stream?path={quote(path)}"
+    xml = pse_feed_tpl.render(
+        feed_id=f"{SERVER_BASE.rstrip('/')}{_abs_url(self_href)}",
+        updated=now_rfc3339(),
+        title=f"Pages — {Path(path).name}",
+        self_href=_abs_url(self_href),
+        start_href=_abs_url("/opds"),
+        entries=entries_xml,
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
+@app.get("/pse/page")
+def pse_page(path: str = Query(...), page: int = Query(1, ge=1), _=Depends(require_basic)):
+    """Serve the Nth page from a CBZ as image/jpeg (cached)."""
+    abs_cbz = _abspath(path)
+    if not abs_cbz.exists() or not abs_cbz.is_file():
+        raise HTTPException(404, "Book not found")
+
+    pages = _cbz_list_pages(abs_cbz)
+    if not pages or page > len(pages):
+        raise HTTPException(404, "Page not found")
+
+    inner = pages[page - 1]
+    cache_dir = _book_cache_dir(path)
+    dest = cache_dir / f"{page:04d}.jpg"
+    out = _ensure_page_jpeg(abs_cbz, inner, dest)
+    return FileResponse(out, media_type="image/jpeg")
 
 # -------------------- Dashboard & stats --------------------
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(_=Depends(require_basic)):
     tpl = env.get_template("dashboard.html")
     return HTMLResponse(tpl.render())
-
 
 @app.get("/stats.json", response_class=JSONResponse)
 def stats(_=Depends(require_basic)):
@@ -511,7 +599,6 @@ def stats(_=Depends(require_basic)):
 
     return JSONResponse(payload)
 
-
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
 def debug_children(path: str = ""):
@@ -522,14 +609,11 @@ def debug_children(path: str = ""):
         conn.close()
     return JSONResponse([{"rel": r["rel"], "is_dir": int(r["is_dir"]), "name": r["name"]} for r in rows])
 
-
 # -------------------- Smart Lists --------------------
 SMARTLISTS_PATH = Path("/data/smartlists.json")
 
-
 def _slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "list"
-
 
 def _load_smartlists() -> list[dict]:
     if SMARTLISTS_PATH.exists():
@@ -539,11 +623,9 @@ def _load_smartlists() -> list[dict]:
             return []
     return []
 
-
 def _save_smartlists(lists: list[dict]) -> None:
     SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SMARTLISTS_PATH.write_text(json.dumps(lists, ensure_ascii=False, indent=0), encoding="utf-8")
-
 
 @app.get("/opds/smart", response_class=Response)
 def opds_smart_lists(_=Depends(require_basic)):
@@ -558,12 +640,11 @@ def opds_smart_lists(_=Depends(require_basic)):
                 updated=now_rfc3339(),
                 title=sl["name"],
                 is_dir=True,
-                href=_abs_url(href),
+                href_abs=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
             )
         )
     xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
-
 
 @app.get("/opds/smart/{slug}", response_class=Response)
 def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
@@ -591,17 +672,14 @@ def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
     xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
-
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):
     tpl = env.get_template("smartlists.html")
     return HTMLResponse(tpl.render())
 
-
 @app.get("/smartlists.json", response_class=JSONResponse)
 def smartlists_get(_=Depends(require_basic)):
     return JSONResponse(_load_smartlists())
-
 
 @app.post("/smartlists.json", response_class=JSONResponse)
 def smartlists_post(payload: list[dict], _=Depends(require_basic)):
@@ -644,7 +722,6 @@ def smartlists_post(payload: list[dict], _=Depends(require_basic)):
     _save_smartlists(lists)
     return JSONResponse({"ok": True, "count": len(lists)})
 
-
 # -------------------- Index status & Reindex --------------------
 @app.get("/index/status", response_class=JSONResponse)
 def index_status(_=Depends(require_basic)):
@@ -654,7 +731,6 @@ def index_status(_=Depends(require_basic)):
     finally:
         conn.close()
     return JSONResponse({**_INDEX_STATUS, "usable": usable})
-
 
 @app.post("/admin/reindex", response_class=JSONResponse)
 def admin_reindex(_=Depends(require_basic)):

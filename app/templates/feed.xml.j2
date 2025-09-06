@@ -1,19 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
-      xmlns:opds="http://opds-spec.org/2010/catalog">
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"
+      xmlns:pse="http://vaemendis.net/opds-pse/ns">
   <id>{{ feed_id }}</id>
   <updated>{{ updated }}</updated>
   <title>{{ title }}</title>
 
-  <link rel="self" href="{{ self_href }}" />
-  <link rel="start" href="{{ start_href }}" />
+  <link rel="self" type="application/atom+xml;profile=opds-catalog" href="{{ base }}{{ self_href }}" />
+  <link rel="start" type="application/atom+xml;profile=opds-catalog" href="{{ base }}{{ start_href }}" />
   <link rel="search" type="application/opensearchdescription+xml" href="{{ base }}/opds/search.xml" />
+  {% if next_href %}
+  <link rel="next" type="application/atom+xml;profile=opds-catalog" href="{{ base }}{{ next_href }}" />
+  {% endif %}
 
-  {% if next_href -%}
-  <link rel="next" href="{{ next_href }}" />
-  {% endif -%}
-
-  {% for e in entries %}
+  {% for e in entries -%}
   {{ e | safe }}
   {% endfor %}
 </feed>

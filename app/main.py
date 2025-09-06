@@ -16,6 +16,7 @@ import json
 import zipfile
 import hashlib
 from PIL import Image
+from math import ceil
 
 from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX
 from .opds import now_rfc3339, mime_for
@@ -272,7 +273,11 @@ def _categories_from_row(row) -> list[str]:
         out.append(c)
     return out
 
-def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optional[str] = None):
+def _feed(entries_xml: List[str], title: str, self_href: str,
+          next_href: Optional[str] = None,
+          os_total: Optional[int] = None,
+          os_start: Optional[int] = None,
+          os_items: Optional[int] = None):
     tpl = env.get_template("feed.xml.j2")
     base = SERVER_BASE.rstrip("/")
     return tpl.render(
@@ -284,7 +289,11 @@ def _feed(entries_xml: List[str], title: str, self_href: str, next_href: Optiona
         base=base,
         next_href=_abs_url(next_href) if next_href else None,
         entries=entries_xml,
+        os_total=os_total,
+        os_start=os_start,
+        os_items=os_items,
     )
+
 
 def _entry_xml_from_row(row) -> str:
     tpl = env.get_template("entry.xml.j2")
@@ -392,24 +401,81 @@ def opensearch_description(_=Depends(require_basic)):
     return Response(content=xml, media_type="application/opensearchdescription+xml")
 
 @app.get("/opds/search", response_class=Response)
-def opds_search(q: str = Query("", alias="q"), page: int = 1, _=Depends(require_basic)):
-    q_str = (q or "").strip()
-    if not q_str:
-        return browse(path="", page=page)
+def opds_search(q: str | None = Query(None, alias="q"),
+                page: int | None = Query(None),
+                request: Request = None,
+                _=Depends(require_basic)):
+    """
+    Panels/clients compatibility:
+    - query can be in q, query, searchTerms, term
+    - paging can be page, startPage, or startIndex (1-based or index-based)
+    """
 
+    # Collect query term across multiple names
+    qp = request.query_params if request else {}
+    term = (q or
+            qp.get("query") or
+            qp.get("searchTerms") or
+            qp.get("term") or
+            "").strip()
+
+    if not term:
+        # no query -> behave like browse root (some clients call search with empty)
+        return browse(path="", page=1)
+
+    # Resolve page number
+    # 1) explicit page (1-based)
+    if page is not None:
+        pg = max(1, int(page))
+    else:
+        # 2) startPage (1-based)
+        if "startPage" in qp:
+            try:
+                pg = max(1, int(qp.get("startPage")))
+            except Exception:
+                pg = 1
+        # 3) startIndex (0/1-based index of first result)
+        elif "startIndex" in qp:
+            try:
+                si = int(qp.get("startIndex"))
+                # Many clients use 1-based startIndex; tolerate 0-based as well
+                si = max(0, si - 1) if si > 0 else 0
+                pg = max(1, int(ceil((si + 1) / PAGE_SIZE)))
+            except Exception:
+                pg = 1
+        else:
+            pg = 1
+
+    start = (pg - 1) * PAGE_SIZE
+
+    # Query DB
     conn = db.connect()
     try:
-        start = (page - 1) * PAGE_SIZE
-        rows = db.search_q(conn, q_str, PAGE_SIZE, start)
+        rows = db.search_q(conn, term, PAGE_SIZE, start)
+        try:
+            total = db.search_count(conn, term)
+        except Exception:
+            total = start + len(rows)
     finally:
         conn.close()
 
     entries_xml = [_entry_xml_from_row(r) for r in rows]
-    self_href = f"/opds/search?q={quote(q_str)}&page={page}"
-    next_href = f"/opds/search?q={quote(q_str)}&page={page+1}" if len(rows) == PAGE_SIZE else None
-    xml = _feed(entries_xml, title=f"Search: {q_str}", self_href=self_href, next_href=next_href)
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
+    self_href = f"/opds/search?q={quote(term)}&page={pg}"
+    next_href = None
+    if (start + len(rows)) < total:
+        next_href = f"/opds/search?q={quote(term)}&page={pg+1}"
+
+    xml = _feed(
+        entries_xml,
+        title=f"Search: {term}",
+        self_href=self_href,
+        next_href=next_href,
+        os_total=total,
+        os_start=start + 1,     # show 1-based start index in feed metadata
+        os_items=PAGE_SIZE,
+    )
+    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
     p = (LIBRARY_DIR / rel).resolve()

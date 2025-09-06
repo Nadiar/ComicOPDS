@@ -179,38 +179,48 @@ def stats(conn: sqlite3.Connection) -> dict:
     out["top_writers"] = {"labels":[r[0] for r in writers], "values":[r[1] for r in writers]}
     return out
 
+def search_q(conn, q: str, limit: int, offset: int):
+    like = f"%{q}%"
+    return conn.execute(
+        """
+        SELECT i.*, m.title, m.series, m.number, m.volume, m.year, m.month, m.day,
+               m.writer, m.publisher, m.summary, m.genre, m.tags, m.characters,
+               m.teams, m.locations, m.comicvineissue
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.is_dir = 0
+          AND (
+            i.name LIKE ? OR
+            m.title LIKE ? OR
+            m.series LIKE ? OR
+            m.writer LIKE ? OR
+            m.publisher LIKE ?
+          )
+        ORDER BY COALESCE(m.series, i.name), CAST(COALESCE(NULLIF(m.number,''), '0') AS INTEGER), i.name
+        LIMIT ? OFFSET ?
+        """,
+        (like, like, like, like, like, limit, offset),
+    ).fetchall()
 
-def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int) -> list[sqlite3.Row]:
-    # Use FTS if available; else fallback to LIKE across a few fields
-    q = (q or "").strip()
-    if not q:
-        return []
-    try:
-        return conn.execute(
-            """SELECT i.rel,i.name,i.is_dir,i.size,i.mtime,i.ext,
-                      m.title,m.series,m.number,m.volume,m.publisher,m.writer,m.year,m.month,m.day,
-                      m.summary,m.languageiso,m.comicvineissue,m.genre,m.tags,m.characters,m.teams,m.locations
-               FROM search s
-               JOIN items i ON i.rel=s.rel
-               LEFT JOIN meta m ON m.rel=i.rel
-               WHERE s MATCH ? AND i.is_dir=0
-               ORDER BY rank LIMIT ? OFFSET ?""",
-            (q, limit, offset),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        qlike = f"%{q.lower()}%"
-        return conn.execute(
-            """SELECT i.rel,i.name,i.is_dir,i.size,i.mtime,i.ext,
-                      m.title,m.series,m.number,m.volume,m.publisher,m.writer,m.year,m.month,m.day,
-                      m.summary,m.languageiso,m.comicvineissue,m.genre,m.tags,m.characters,m.teams,m.locations
-               FROM items i LEFT JOIN meta m ON m.rel=i.rel
-               WHERE i.is_dir=0 AND (
-                 LOWER(i.name) LIKE ? OR LOWER(IFNULL(m.title,'')) LIKE ? OR LOWER(IFNULL(m.series,'')) LIKE ?
-                 OR LOWER(IFNULL(m.publisher,'')) LIKE ? OR LOWER(IFNULL(m.writer,'')) LIKE ?
-               )
-               LIMIT ? OFFSET ?""",
-            (qlike, qlike, qlike, qlike, qlike, limit, offset),
-        ).fetchall()
+def search_count(conn, q: str) -> int:
+    like = f"%{q}%"
+    row = conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.is_dir = 0
+          AND (
+            i.name LIKE ? OR
+            m.title LIKE ? OR
+            m.series LIKE ? OR
+            m.writer LIKE ? OR
+            m.publisher LIKE ?
+          )
+        """,
+        (like, like, like, like, like),
+    ).fetchone()
+    return int(row[0] if row else 0)
 
 
 # ------- smart list (advanced) dynamic WHERE builder -------

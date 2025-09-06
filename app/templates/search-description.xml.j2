@@ -1,7 +1,21 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
-  <ShortName>ComicOPDS Search</ShortName>
-  <Description>Search your comics</Description>
+  <ShortName>ComicOPDS</ShortName>
+  <Description>Search your ComicOPDS library</Description>
+
+  <!-- Common variants some clients expect -->
   <Url type="application/atom+xml"
-       template="{{ base }}/opds/search?q={searchTerms}&amp;page={startPage?}" />
+       template="{{ base }}/opds/search?q={searchTerms}&page={startPage?}" />
+  <Url type="application/atom+xml"
+       template="{{ base }}/opds/search?query={searchTerms}&page={startPage?}" />
+  <Url type="application/atom+xml"
+       template="{{ base }}/opds/search?q={searchTerms}&startIndex={startIndex?}" />
+
+  <!-- With profile (others prefer this) -->
+  <Url type="application/atom+xml;profile=opds-catalog"
+       template="{{ base }}/opds/search?q={searchTerms}&page={startPage?}" />
+
+  <Query role="example" searchTerms="batman" />
+  <InputEncoding>UTF-8</InputEncoding>
+  <OutputEncoding>UTF-8</OutputEncoding>
 </OpenSearchDescription>

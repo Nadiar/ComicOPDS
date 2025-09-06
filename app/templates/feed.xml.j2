@@ -13,6 +13,12 @@
   <link rel="next" type="application/atom+xml;profile=opds-catalog" href="{{ base }}{{ next_href }}" />
   {% endif %}
 
+  {% if os_total is defined %}
+  <opensearch:totalResults>{{ os_total }}</opensearch:totalResults>
+  <opensearch:startIndex>{{ os_start }}</opensearch:startIndex>
+  <opensearch:itemsPerPage>{{ os_items }}</opensearch:itemsPerPage>
+  {% endif %}
+
   {% for e in entries -%}
   {{ e | safe }}
   {% endfor %}

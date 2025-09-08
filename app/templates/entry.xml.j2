@@ -15,18 +15,16 @@
     <!-- Direct file stream (Range-enabled, optional) -->
     <link rel="enclosure" href="{{ stream_href_abs }}" type="{{ mime }}" />
 
-    <!-- OPDS Page Streaming Extension 1.1: template URL + page count -->
+    <!-- OPDS Page Streaming Extension 1.1 (Panels looks for this pattern) -->
     <link rel="http://vaemendis.net/opds-pse/stream"
           type="image/jpeg"
           href="{{ pse_template_abs }}"
           pse:count="{{ page_count }}" />
 
     {% if image_abs %}
-      <!-- Full cover (some clients prefer a full image rel) -->
       <link rel="http://opds-spec.org/image" href="{{ image_abs }}" type="image/jpeg" />
     {% endif %}
     {% if thumb_href_abs %}
-      <!-- Thumbnail cover -->
       <link rel="http://opds-spec.org/image/thumbnail" href="{{ thumb_href_abs }}" type="image/jpeg" />
     {% endif %}
 

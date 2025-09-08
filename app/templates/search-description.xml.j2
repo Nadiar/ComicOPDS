@@ -3,11 +3,9 @@
   <ShortName>ComicOPDS</ShortName>
   <Description>Search your ComicOPDS library</Description>
 
-  <!-- OPDS v1.2 search (both MIME variants, with rel="results") -->
-  <Url rel="results" type="application/atom+xml;profile=opds-catalog"
-       template="{{ base }}/opds/v1.2/search?query={searchTerms}&page={startPage?}" />
-  <Url rel="results" type="application/atom+xml"
-       template="{{ base }}/opds/v1.2/search?query={searchTerms}&page={startPage?}" />
+  <!-- Single, simple template Panels follows: -->
+  <Url type="application/atom+xml;profile=opds-catalog"
+       template="{{ base }}/opds/search?query={searchTerms}" />
 
   <InputEncoding>UTF-8</InputEncoding>
   <OutputEncoding>UTF-8</OutputEncoding>

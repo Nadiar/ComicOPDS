@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en" data-bs-theme="auto">
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ComicOPDS — Library Dashboard</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ComicOPDS — Dashboard</title>
 
   <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -13,330 +13,200 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
-    body { background: var(--bs-body-bg); }
-    .metric { display:flex; align-items:center; gap:.75rem; }
-    .metric .bi { font-size:1.6rem; opacity:.8; }
-    .metric .value { font-size:1.9rem; font-weight:700; line-height:1; }
-    .metric .label { color: var(--bs-secondary-color); font-size:.85rem; }
-    .chart-card canvas { width: 100% !important; height: 360px !important; }
-    .footer-note { color: var(--bs-secondary-color); }
-    .kpis .card { transition: transform .15s ease; }
-    .kpis .card:hover { transform: translateY(-2px); }
+    body { background: #f8f9fa; }
+    .stat-card { min-height: 120px; }
+    .chart-wrap { position: relative; min-height: 300px; }
+    .empty-overlay {
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      font-size:0.95rem; color:#777; pointer-events:none;
+    }
+    .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
-    <div class="container">
-      <a class="navbar-brand fw-semibold" href="#"><i class="bi bi-book-half me-2"></i>ComicOPDS</a>
+<div class="container py-4">
 
-      <div class="ms-auto d-flex align-items-center gap-3">
-        <span class="navbar-text small text-secondary">
-          <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
-        </span>
-        <button id="reindexBtn" class="btn btn-sm btn-outline-secondary">
-          <i class="bi bi-arrow-repeat me-1"></i> Reindex
-        </button>
-      </div>
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0"><i class="bi bi-bar-chart"></i> ComicOPDS Dashboard</h1>
+    <div>
+      <button id="btn-refresh" class="btn btn-info btn-sm me-2"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
+      <button id="btn-reindex" class="btn btn-warning btn-sm"><i class="bi bi-arrow-repeat"></i> Reindex</button>
     </div>
-  </nav>
+  </div>
 
-  <main class="container my-4">
-    <!-- Indexing progress (shown while running / first run) -->
-    <div id="indexProgress" class="alert alert-secondary d-none" role="alert">
-      <div class="d-flex justify-content-between">
-        <div>
-          <strong>Indexing your library…</strong>
-          <div class="small text-secondary">
-            <span id="idxPhase">indexing</span>
-            <span id="idxCounts" class="ms-2">(0 / 0)</span>
-          </div>
-          <div class="small text-secondary" id="idxCurrent"></div>
-        </div>
-        <div class="text-end">
-          <span class="badge text-bg-light" id="idxEta">—</span>
-        </div>
-      </div>
-      <div class="progress mt-2" role="progressbar" aria-label="Index progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-        <div id="idxBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%"></div>
-      </div>
+  <!-- Indexing status -->
+  <div id="indexBox" class="alert alert-info py-2" style="display:none;">
+    <strong>Indexing:</strong>
+    <span id="idx-phase">—</span> •
+    <span id="idx-counts">0 / 0</span>
+    <div class="progress mt-2" style="height: 8px;">
+      <div id="idx-progress" class="progress-bar bg-info" role="progressbar" style="width:0%">0%</div>
     </div>
+  </div>
 
-    <!-- KPIs -->
-    <div class="row g-3 kpis">
-      <div class="col-12 col-md-6 col-xl-3">
-        <div class="card h-100">
-          <div class="card-body">
-            <div class="metric">
-              <i class="bi bi-collection"></i>
-              <div>
-                <div class="value" id="totalComics">0</div>
-                <div class="label">Total comics</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-xl-3">
-        <div class="card h-100">
-          <div class="card-body">
-            <div class="metric">
-              <i class="bi bi-layers"></i>
-              <div>
-                <div class="value" id="uniqueSeries">0</div>
-                <div class="label">Unique series</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-xl-3">
-        <div class="card h-100">
-          <div class="card-body">
-            <div class="metric">
-              <i class="bi bi-building"></i>
-              <div>
-                <div class="value" id="uniquePublishers">0</div>
-                <div class="label">Publishers</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-      <div class="col-12 col-md-6 col-xl-3">
-        <div class="card h-100">
-          <div class="card-body">
-            <div class="metric">
-              <i class="bi bi-filetype-zip"></i>
-              <div>
-                <div class="value" id="formats">—</div>
-                <div class="label">Formats</div>
-              </div>
-            </div>
-          </div>
+  <!-- Stats cards -->
+  <div class="row g-3 mb-4">
+    <div class="col-md-3">
+      <div class="card stat-card text-center">
+        <div class="card-body">
+          <div class="fw-bold text-muted">Total comics</div>
+          <div id="stat-total" class="display-6">—</div>
         </div>
       </div>
     </div>
-
-    <!-- Charts -->
-    <div class="row g-3 mt-1">
-      <div class="col-12 col-lg-6">
-        <div class="card h-100 chart-card">
-          <div class="card-header fw-semibold">Publishers distribution</div>
-          <div class="card-body"><canvas id="publishersChart"></canvas></div>
-          <div class="card-footer small footer-note">Top publishers (others grouped).</div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100 chart-card">
-          <div class="card-header fw-semibold">Publication timeline</div>
-          <div class="card-body"><canvas id="timelineChart"></canvas></div>
-          <div class="card-footer small footer-note">Issues per year.</div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100 chart-card">
-          <div class="card-header fw-semibold">Formats breakdown</div>
-          <div class="card-body"><canvas id="formatsChart"></canvas></div>
-          <div class="card-footer small footer-note">Counts by file extension (e.g., CBZ).</div>
-        </div>
-      </div>
-
-      <div class="col-12 col-lg-6">
-        <div class="card h-100 chart-card">
-          <div class="card-header fw-semibold">Top writers</div>
-          <div class="card-body"><canvas id="writersChart"></canvas></div>
-          <div class="card-footer small footer-note">Top 15 writers across your library.</div>
+    <div class="col-md-3">
+      <div class="card stat-card text-center">
+        <div class="card-body">
+          <div class="fw-bold text-muted">Unique series</div>
+          <div id="stat-series" class="display-6">—</div>
         </div>
       </div>
     </div>
-  </main>
-
-  <footer class="container my-4 small footer-note">
-    <div class="d-flex justify-content-between">
-      <span>ComicOPDS Dashboard</span>
-      <span><a href="/opds" class="link-secondary text-decoration-none"><i class="bi bi-rss me-1"></i>OPDS feed</a></span>
+    <div class="col-md-3">
+      <div class="card stat-card text-center">
+        <div class="card-body">
+          <div class="fw-bold text-muted">Publishers</div>
+          <div id="stat-publishers" class="display-6">—</div>
+        </div>
+      </div>
     </div>
-  </footer>
+    <div class="col-md-3">
+      <div class="card stat-card text-center">
+        <div class="card-body">
+          <div class="fw-bold text-muted">Last updated</div>
+          <div id="stat-updated" class="h6 font-mono">—</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <!-- Bootstrap JS (optional) -->
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <!-- Charts -->
+  <div class="row g-3 mb-3">
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header fw-semibold">Publishers distribution</div>
+        <div class="card-body chart-wrap">
+          <canvas id="publishersChart"></canvas>
+          <div id="pub-empty" class="empty-overlay">No data</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card">
+        <div class="card-header fw-semibold">Publication timeline</div>
+        <div class="card-body chart-wrap">
+          <canvas id="timelineChart"></canvas>
+          <div id="time-empty" class="empty-overlay">No data</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-  <script>
-    // Nice default chart options (Bootstrap-friendly)
-    const baseOptions = {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } },
-        tooltip: { mode: 'index', intersect: false }
-      },
-      interaction: { mode: 'nearest', axis: 'x', intersect: false },
-      scales: {
-        x: { ticks: { maxRotation: 0, autoSkip: true } },
-        y: { beginAtZero: true, ticks: { precision: 0 } }
-      }
-    };
+  <div class="row g-3 mb-3">
+    <div class="col-md-12">
+      <div class="card">
+        <div class="card-header fw-semibold">Top writers</div>
+        <div class="card-body chart-wrap" style="min-height:380px;">
+          <canvas id="writersChart"></canvas>
+          <div id="writers-empty" class="empty-overlay">No data</div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-    // Chart registry to safely re-render
-    const charts = {};
-    function upsertChart(canvasId, config) {
-      const existing = Chart.getChart(canvasId) || charts[canvasId];
-      if (existing) existing.destroy();
-      const ctx = document.getElementById(canvasId);
-      const inst = new Chart(ctx, config);
-      charts[canvasId] = inst;
-      return inst;
-    }
+  <p class="text-muted small">Tip: Use <em>Reindex</em> after adding comics. Thumbnails are generated lazily unless pre-cache is enabled.</p>
+</div>
 
-    async function load() {
-      const res = await fetch("/stats.json", { credentials: "include" });
-      const data = await res.json();
+<script>
+(function(){
+  let charts = { publishers:null, timeline:null, writers:null };
 
-      // KPIs
-      document.getElementById("lastUpdated").textContent =
-        data.last_updated ? new Date(data.last_updated * 1000).toLocaleString() : "—";
-      document.getElementById("covers").textContent = data.total_covers ?? "0";
-      document.getElementById("totalComics").textContent = data.total_comics ?? "0";
-      document.getElementById("uniqueSeries").textContent = data.unique_series ?? "0";
-      document.getElementById("uniquePublishers").textContent = data.unique_publishers ?? "0";
-      const fmt = data.formats || {};
-      document.getElementById("formats").textContent =
-        Object.keys(fmt).length ? Object.entries(fmt).map(([k,v]) => `${k.toUpperCase()}: ${v}`).join("  ") : "—";
+  function fmtInt(n){ return (n||n===0)? n.toLocaleString() : "—"; }
+  function fmtDateEpoch(sec){
+    if (!sec) return "—";
+    try { return new Date(sec*1000).toISOString().slice(0,19).replace('T',' '); }
+    catch { return "—"; }
+  }
 
-      // Charts
-      // 1) Publishers doughnut (sorted)
-      const pubs = data.publishers || {labels:[], values:[]};
-      const pubsSorted = (pubs.labels || []).map((l,i)=>({l, v: pubs.values[i]})).sort((a,b)=>b.v-a.v);
-      upsertChart("publishersChart", {
-        type: "doughnut",
-        data: { labels: pubsSorted.map(x=>x.l), datasets: [{ data: pubsSorted.map(x=>x.v) }] },
-        options: { ...baseOptions, cutout: "60%", scales: {} }
-      });
+  async function jget(u){ const r=await fetch(u); if(!r.ok) throw Error(r.status); return r.json(); }
 
-      // 2) Timeline line (area)
-      upsertChart("timelineChart", {
-        type: "line",
-        data: {
-          labels: (data.timeline && data.timeline.labels) || [],
-          datasets: [{ label: "Issues per year", data: (data.timeline && data.timeline.values) || [], fill: true, tension: 0.25, pointRadius: 2 }]
-        },
-        options: { ...baseOptions }
-      });
+  async function loadStats(){
+    const d = await jget("/stats.json");
+    document.getElementById("stat-total").textContent = fmtInt(d.total_comics);
+    document.getElementById("stat-series").textContent = fmtInt(d.unique_series);
+    document.getElementById("stat-publishers").textContent = fmtInt(d.publishers);
+    document.getElementById("stat-updated").textContent = fmtDateEpoch(d.last_updated);
 
-      // 3) Formats bar
-      const fmtLabels = Object.keys(fmt);
-      const fmtValues = Object.values(fmt);
-      upsertChart("formatsChart", {
-        type: "bar",
-        data: { labels: fmtLabels, datasets: [{ label: "Files", data: fmtValues }] },
-        options: { ...baseOptions }
-      });
-
-      // 4) Top writers (horizontal bar)
-      const tw = data.top_writers || {labels:[], values:[]};
-      upsertChart("writersChart", {
-        type: "bar",
-        data: { labels: tw.labels, datasets: [{ label: "Issues", data: tw.values }] },
-        options: { ...baseOptions, indexAxis: "y" }
+    // Publishers
+    const pubs = d.top_publishers||[];
+    toggleEmpty("pub-empty", pubs.length===0);
+    if(charts.publishers) charts.publishers.destroy();
+    if(pubs.length){
+      charts.publishers = new Chart(document.getElementById("publishersChart"), {
+        type:"doughnut",
+        data:{ labels: pubs.map(x=>x.publisher), datasets:[{ data: pubs.map(x=>x.count) }]},
+        options:{ responsive:true, plugins:{ legend:{position:"bottom"}}, maintainAspectRatio:false }
       });
     }
 
-    // Progress bar UI
-    function showProgressUI(s) {
-      const box = document.getElementById("indexProgress");
-      if (s.running || (!s.usable && s.phase !== "idle")) {
-        box.classList.remove("d-none");
-        const done = s.done || 0, total = Math.max(s.total || 0, 1);
-        const pct = Math.min(100, Math.floor((done / total) * 100));
-        document.getElementById("idxPhase").textContent = s.phase || "indexing";
-        document.getElementById("idxCounts").textContent = `(${done} / ${s.total || 0})`;
-        document.getElementById("idxCurrent").textContent = s.current || "";
-        const bar = document.getElementById("idxBar");
-        bar.style.width = pct + "%";
-        bar.setAttribute("aria-valuenow", pct);
-        // naive ETA
-        let eta = "—";
-        if (s.started_at && done > 5 && total > done) {
-          const elapsed = (Date.now()/1000 - s.started_at);
-          const per = elapsed / done;
-          const secs = Math.round(per * (total - done));
-          const m = Math.floor(secs/60), sec = secs%60;
-          eta = `~${m}m ${sec}s left`;
-        }
-        document.getElementById("idxEta").textContent = eta;
-      } else {
-        box.classList.add("d-none");
-      }
+    // Timeline
+    const tl = (d.timeline_by_year||[]).filter(x=>x.year).sort((a,b)=>a.year-b.year);
+    toggleEmpty("time-empty", tl.length===0);
+    if(charts.timeline) charts.timeline.destroy();
+    if(tl.length){
+      charts.timeline = new Chart(document.getElementById("timelineChart"), {
+        type:"line",
+        data:{ labels: tl.map(x=>x.year), datasets:[{ data: tl.map(x=>x.count), tension:0.2 }]},
+        options:{ responsive:true, plugins:{legend:{display:false}}, maintainAspectRatio:false }
+      });
     }
 
-    let lastIdxStatus = null;
-
-    function shouldRefreshCharts(newStatus, oldStatus) {
-      if (!newStatus) return false;
-      // Only refresh when we go from running -> idle, or ended_at changes
-      if (!oldStatus) return (!newStatus.running && newStatus.usable);
-      const finishedNow = (oldStatus.running && !newStatus.running);
-      const endedChanged = (newStatus.ended_at && newStatus.ended_at !== oldStatus.ended_at);
-      const becameUsable = (!oldStatus.usable && newStatus.usable);
-      return finishedNow || endedChanged || becameUsable;
+    // Writers
+    const wr = d.top_writers||[];
+    toggleEmpty("writers-empty", wr.length===0);
+    if(charts.writers) charts.writers.destroy();
+    if(wr.length){
+      charts.writers = new Chart(document.getElementById("writersChart"), {
+        type:"bar",
+        data:{ labels: wr.map(x=>x.writer), datasets:[{ data: wr.map(x=>x.count)}]},
+        options:{ indexAxis:"y", responsive:true, plugins:{legend:{display:false}}, maintainAspectRatio:false }
+      });
     }
+  }
 
-    async function pollIndex() {
-      let nextDelay = 5000; // idle default
-      try {
-        const r = await fetch("/index/status", { credentials: "include", cache: "no-store" });
-        const s = await r.json();
-        showProgressUI(s);
+  function toggleEmpty(id, show){ document.getElementById(id).style.display = show? "flex":"none"; }
 
-        if (shouldRefreshCharts(s, lastIdxStatus)) {
-          await load(); // fetch /stats.json once on transition
-        }
+  async function fetchIndexStatus(){
+    try{
+      const s=await jget("/index/status");
+      const box=document.getElementById("indexBox");
+      if(!s||!s.running){ box.style.display="none"; return; }
+      box.style.display="";
+      document.getElementById("idx-phase").textContent=s.phase||"running";
+      document.getElementById("idx-counts").textContent=`${s.done||0} / ${s.total||0}`;
+      const pct=(s.total>0)? Math.floor((s.done/s.total)*100):0;
+      const bar=document.getElementById("idx-progress");
+      bar.style.width=pct+"%"; bar.textContent=pct+"%";
+    }catch{}
+  }
 
-        // While running, poll faster; when idle, slower
-        nextDelay = s.running ? 800 : 5000;
-        lastIdxStatus = s;
-      } catch (_) {
-        nextDelay = 5000;
-      } finally {
-        setTimeout(pollIndex, nextDelay);
-      }
-    }
+  async function triggerReindex(){
+    try{
+      await fetch("/admin/reindex",{method:"POST"});
+      document.getElementById("indexBox").style.display="";
+      let tries=0; const t=setInterval(async()=>{
+        tries++; await fetchIndexStatus();
+        if(tries>300) clearInterval(t);
+      },1000);
+    }catch(e){ alert("Failed to start reindex: "+e); }
+  }
 
-    document.getElementById("reindexBtn").addEventListener("click", reindex);
+  document.getElementById("btn-refresh").onclick=()=>{ loadStats(); fetchIndexStatus(); };
+  document.getElementById("btn-reindex").onclick=()=>{ triggerReindex(); };
 
-    // Start polling; charts render when indexing first completes (or immediately if already idle & usable)
-    pollIndex();
-
-    async function reindex() {
-      const btn = document.getElementById("reindexBtn");
-      const original = btn.innerHTML;
-      try {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Reindexing…';
-        const r = await fetch("/admin/reindex", { method: "POST", credentials: "include" });
-        if (!r.ok) {
-          const msg = await r.text().catch(()=>r.statusText);
-          alert("Reindex failed: " + msg);
-        }
-        setTimeout(() => { btn.innerHTML = original; btn.disabled = false; }, 800);
-      } catch (e) {
-        alert("Reindex error: " + (e?.message || e));
-        btn.innerHTML = original;
-        btn.disabled = false;
-      }
-    }
-
-    document.getElementById("reindexBtn").addEventListener("click", reindex);
-
-    // start polling; charts will render when index is ready/idle
-    pollIndex();
-
-    // Clean up charts if the page unloads
-    window.addEventListener("beforeunload", () => {
-      Object.values(charts).forEach(c => { try { c.destroy(); } catch(_){} });
-    });
-  </script>
+  loadStats(); fetchIndexStatus();
+})();
+</script>
 </body>
 </html>

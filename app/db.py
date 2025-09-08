@@ -1,410 +1,583 @@
+# app/db.py
 from __future__ import annotations
+
+import re
 import sqlite3
-import contextlib
 from pathlib import Path
-from typing import Iterable, Mapping, Any, Optional
+from typing import Any, Dict, List, Tuple
 
 DB_PATH = Path("/data/library.db")
 
-SCHEMA_FILE = Path(__file__).with_name("schema.sql")
+# Feature flag: set after schema init
+HAS_FTS5: bool = False
 
+def has_fts5() -> bool:
+    """Return True if the DB initialized an FTS5 virtual table."""
+    return HAS_FTS5
+
+# ----------------------------- Connection & Schema -----------------------------
 
 def connect() -> sqlite3.Connection:
-    """
-    Create a new connection (safe to use per-request / per-thread).
-    """
-    conn = sqlite3.connect(
-        DB_PATH,
-        check_same_thread=False,   # allow use across threads (each thread should use its own conn)
-        isolation_level=None,      # autocommit; we manage explicit BEGIN via our tx() helper
-    )
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Pragmas for concurrency + perf
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait up to 5s if DB is temporarily locked
-
-    # Ensure schema exists (idempotent)
-    conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
+    # Pragmas for speed & concurrency (tweak as needed)
+    try: conn.execute("PRAGMA journal_mode=WAL;")
+    except Exception: pass
+    try: conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception: pass
+    try: conn.execute("PRAGMA temp_store=MEMORY;")
+    except Exception: pass
+    # ~200MB page cache (negative means KiB)
+    try: conn.execute("PRAGMA cache_size=-200000;")
+    except Exception: pass
+    _ensure_schema(conn)
     return conn
 
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    global HAS_FTS5
 
-@contextlib.contextmanager
-def tx(conn: sqlite3.Connection):
-    cur = conn.cursor()
+    # Core tables
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS items (
+      rel    TEXT PRIMARY KEY,
+      name   TEXT,
+      parent TEXT,
+      is_dir INTEGER NOT NULL,
+      size   INTEGER,
+      mtime  REAL,
+      ext    TEXT
+    )
+    """)
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS meta (
+      rel            TEXT PRIMARY KEY,
+      title          TEXT,
+      series         TEXT,
+      number         TEXT,
+      volume         TEXT,
+      year           TEXT,
+      month          TEXT,
+      day            TEXT,
+      writer         TEXT,
+      publisher      TEXT,
+      summary        TEXT,
+      genre          TEXT,
+      tags           TEXT,
+      characters     TEXT,
+      teams          TEXT,
+      locations      TEXT,
+      comicvineissue TEXT
+    )
+    """)
+
+    # Helpful indexes
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_items_isdir    ON items(is_dir)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_series    ON meta(series)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_title     ON meta(title)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_year      ON meta(year)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_writer    ON meta(writer)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_publisher ON meta(publisher)")
+
+    # Try FTS5 — if it fails, we fall back to LIKE search
     try:
-        yield cur
-        conn.commit()
+        conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts
+        USING fts5(
+          rel UNINDEXED,
+          text,
+          tokenize = 'unicode61'
+        )""")
+        HAS_FTS5 = True
     except Exception:
-        conn.rollback()
-        raise
+        HAS_FTS5 = False
 
+# ----------------------------- Scan lifecycle ---------------------------------
 
-# ----------------- scan lifecycle -----------------
+def begin_scan(conn: sqlite3.Connection) -> None:
+    """Called once at the beginning of a full reindex."""
+    conn.execute("DELETE FROM items")
+    conn.execute("DELETE FROM meta")
+    if HAS_FTS5:
+        conn.execute("DELETE FROM fts")
+    conn.commit()
 
-def begin_scan(conn: sqlite3.Connection):
-    with conn:
-        conn.execute("UPDATE items SET seen=0")
-
-
-def upsert_dir(conn: sqlite3.Connection, *, rel: str, name: str, parent: str, mtime: float):
-    with conn:
-        conn.execute(
-            """INSERT INTO items(rel,name,is_dir,size,mtime,parent,ext,seen)
-               VALUES(?,?,?,?,?,?,?,1)
-               ON CONFLICT(rel) DO UPDATE SET
-                 name=excluded.name,
-                 is_dir=excluded.is_dir,
-                 mtime=excluded.mtime,
-                 parent=excluded.parent,
-                 ext='',
-                 seen=1""",
-            (rel, name, 1, 0, mtime, parent, ""),
-        )
-
-
-def upsert_file(conn: sqlite3.Connection, *, rel: str, name: str, size: int, mtime: float, parent: str, ext: str):
-    with conn:
-        conn.execute(
-            """INSERT INTO items(rel,name,is_dir,size,mtime,parent,ext,seen)
-               VALUES(?,?,?,?,?,?,?,1)
-               ON CONFLICT(rel) DO UPDATE SET
-                 name=excluded.name,
-                 is_dir=excluded.is_dir,
-                 size=excluded.size,
-                 mtime=excluded.mtime,
-                 parent=excluded.parent,
-                 ext=excluded.ext,
-                 seen=1""",
-            (rel, name, 0, size, mtime, parent, ext),
-        )
-
-
-def upsert_meta(conn: sqlite3.Connection, *, rel: str, meta: Mapping[str, Any]):
-    # keep only fields we actually show/filter on
-    keep = ("title","series","number","volume","publisher","imprint","writer",
-            "year","month","day","languageiso","comicvineissue","genre","tags","summary","characters","teams","locations")
-    filtered = {k: str(v) for k, v in (meta or {}).items() if k in keep and v not in (None, "")}
-    cols = ",".join(filtered.keys())
-    vals = [filtered[k] for k in filtered.keys()]
-
-    with conn:
-        # ensure row exists
-        conn.execute("INSERT OR IGNORE INTO meta(rel) VALUES(?)", (rel,))
-        if filtered:
-            set_clause = ",".join(f"{k}=?" for k in filtered.keys())
-            conn.execute(f"UPDATE meta SET {set_clause} WHERE rel=?", (*vals, rel))
-
-        # update FTS (best-effort; ignore if FTS not present)
-        try:
-            conn.execute("DELETE FROM search WHERE rel=?", (rel,))
-            conn.execute(
-                """INSERT INTO search(rel,name,title,series,publisher,writer,tags,genre)
-                   SELECT i.rel,i.name,m.title,m.series,m.publisher,m.writer,m.tags,m.genre
-                   FROM items i LEFT JOIN meta m ON m.rel=i.rel WHERE i.rel=? AND i.is_dir=0""",
-                (rel,),
-            )
-        except sqlite3.OperationalError:
-            pass
-
-
-def prune_stale(conn: sqlite3.Connection):
-    with conn:
-        conn.execute("DELETE FROM meta WHERE rel IN (SELECT rel FROM items WHERE seen=0)")
-        conn.execute("DELETE FROM items WHERE seen=0")
-
-
-# ----------------- queries -----------------
-
-def children_page(conn: sqlite3.Connection, parent: str, limit: int, offset: int) -> list[sqlite3.Row]:
-    # dirs first by name, then files by series/name + numeric number
-    q = """
-    SELECT i.rel,i.name,i.is_dir,i.size,i.mtime,i.ext,
-           m.title,m.series,m.number,m.volume,m.publisher,m.writer,m.year,m.month,m.day,
-           m.summary,m.languageiso,m.comicvineissue,m.genre,m.tags,m.characters,m.teams,m.locations
-    FROM items i LEFT JOIN meta m ON m.rel=i.rel
-    WHERE i.parent=?
-    ORDER BY i.is_dir DESC,
-             CASE WHEN i.is_dir=1 THEN LOWER(i.name) END ASC,
-             CASE WHEN i.is_dir=0 THEN LOWER(COALESCE(m.series, i.name)) END ASC,
-             CASE WHEN i.is_dir=0 THEN CAST(REPLACE(m.number, ',', '.') AS REAL) END ASC
-    LIMIT ? OFFSET ?"""
-    return conn.execute(q, (parent, limit, offset)).fetchall()
-
-
-def children_count(conn: sqlite3.Connection, parent: str) -> int:
-    return conn.execute("SELECT COUNT(*) FROM items WHERE parent=?", (parent,)).fetchone()[0]
-
-
-def get_item(conn: sqlite3.Connection, rel: str) -> Optional[sqlite3.Row]:
-    q = """SELECT i.rel,i.name,i.is_dir,i.size,i.mtime,i.ext,i.parent,
-                  m.title,m.series,m.number,m.volume,m.publisher,m.writer,m.year,m.month,m.day,
-                  m.summary,m.languageiso,m.comicvineissue,m.genre,m.tags,m.characters,m.teams,m.locations
-           FROM items i LEFT JOIN meta m ON m.rel=i.rel WHERE i.rel=?"""
-    return conn.execute(q, (rel,)).fetchone()
-
-
-def stats(conn: sqlite3.Connection) -> dict:
-    out = {}
-    out["total_comics"] = conn.execute("SELECT COUNT(*) FROM items WHERE is_dir=0").fetchone()[0]
-    out["unique_series"] = conn.execute("SELECT COUNT(DISTINCT series) FROM meta WHERE series IS NOT NULL").fetchone()[0]
-    out["unique_publishers"] = conn.execute("SELECT COUNT(DISTINCT publisher) FROM meta WHERE publisher IS NOT NULL").fetchone()[0]
-    out["last_updated"] = conn.execute("SELECT MAX(mtime) FROM items WHERE is_dir=0").fetchone()[0] or 0
-
-    formats = dict(conn.execute("SELECT ext, COUNT(*) FROM items WHERE is_dir=0 GROUP BY ext"))
-    out["formats"] = formats
-
-    pubs = conn.execute("""SELECT publisher, COUNT(*) c
-                           FROM meta WHERE publisher IS NOT NULL AND publisher <> ''
-                           GROUP BY publisher ORDER BY c DESC""").fetchall()
-    out["publishers"] = {"labels":[r[0] for r in pubs[:15]],
-                         "values":[r[1] for r in pubs[:15]]}
-
-    years = conn.execute("""SELECT CAST(year AS INT) y, COUNT(*) c
-                            FROM meta WHERE year GLOB '[0-9]*'
-                            GROUP BY y ORDER BY y""").fetchall()
-    out["timeline"] = {"labels":[r[0] for r in years],
-                       "values":[r[1] for r in years]}
-
-    # split writers by comma into rows
-    writers = conn.execute("""
-        WITH split AS (
-          SELECT rel, TRIM(value) w
-          FROM meta m
-          JOIN json_each( json_array( REPLACE(IFNULL(m.writer,''), ',', '","') ) )
-        )
-        SELECT w, COUNT(*) c FROM split WHERE w <> '' GROUP BY w ORDER BY c DESC LIMIT 15
-    """).fetchall()
-    out["top_writers"] = {"labels":[r[0] for r in writers], "values":[r[1] for r in writers]}
-    return out
-
-def search_q(conn, q: str, limit: int, offset: int):
-    like = f"%{q}%"
-    return conn.execute(
+def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime: float) -> None:
+    conn.execute(
         """
-        SELECT i.*, m.title, m.series, m.number, m.volume, m.year, m.month, m.day,
-               m.writer, m.publisher, m.summary, m.genre, m.tags, m.characters,
-               m.teams, m.locations, m.comicvineissue
+        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
+        VALUES (?, ?, ?, 1, NULL, ?, NULL)
+        ON CONFLICT(rel) DO UPDATE SET
+          name=excluded.name,
+          parent=excluded.parent,
+          is_dir=excluded.is_dir,
+          mtime=excluded.mtime
+        """,
+        (rel, name, parent, mtime),
+    )
+
+def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
+        ON CONFLICT(rel) DO UPDATE SET
+          name=excluded.name,
+          parent=excluded.parent,
+          is_dir=excluded.is_dir,
+          size=excluded.size,
+          mtime=excluded.mtime,
+          ext=excluded.ext
+        """,
+        (rel, name, parent, size, mtime, ext),
+    )
+
+def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:
+    fields = (
+        "title","series","number","volume","year","month","day",
+        "writer","publisher","summary","genre","tags","characters",
+        "teams","locations","comicvineissue"
+    )
+    vals = [meta.get(k) for k in fields]
+
+    exists = conn.execute("SELECT 1 FROM meta WHERE rel=?", (rel,)).fetchone() is not None
+    if exists:
+        sets = ",".join([f"{k}=?" for k in fields])
+        conn.execute(f"UPDATE meta SET {sets} WHERE rel=?", (*vals, rel))
+    else:
+        cols = ",".join(fields)
+        qms  = ",".join(["?"] * len(fields))
+        conn.execute(f"INSERT INTO meta(rel,{cols}) VALUES (?,{qms})", (rel, *vals))
+
+    # Refresh FTS row for this file (only if supported & it's a file)
+    if HAS_FTS5:
+        it = conn.execute("SELECT name, is_dir FROM items WHERE rel=?", (rel,)).fetchone()
+        if not it or int(it["is_dir"]) != 0:
+            return
+
+        parts: List[str] = []
+        def add(x):
+            if x is not None:
+                s = str(x).strip()
+                if s:
+                    parts.append(s)
+
+        add(meta.get("title"))
+        add(meta.get("series"))
+        add(meta.get("writer"))
+        add(meta.get("publisher"))
+        add(meta.get("genre"))
+        add(meta.get("tags"))
+        add(meta.get("characters"))
+        add(meta.get("teams"))
+        add(meta.get("locations"))
+        add(it["name"])
+        add(meta.get("year"))
+        add(meta.get("number"))
+        add(meta.get("volume"))
+
+        conn.execute("DELETE FROM fts WHERE rel=?", (rel,))
+        if parts:
+            conn.execute("INSERT INTO fts(rel, text) VALUES (?, ?)", (rel, " ".join(parts)))
+
+def prune_stale(conn: sqlite3.Connection) -> None:
+    if HAS_FTS5:
+        conn.execute("""
+            DELETE FROM fts
+             WHERE rel NOT IN (SELECT rel FROM items WHERE is_dir=0)
+        """)
+    conn.commit()
+
+# ----------------------------- Browsing ---------------------------------------
+
+def children_count(conn: sqlite3.Connection, path: str) -> int:
+    if path == "":
+        row = conn.execute("SELECT COUNT(*) FROM items WHERE parent=''", ()).fetchone()
+    else:
+        row = conn.execute("SELECT COUNT(*) FROM items WHERE parent=?", (path,)).fetchone()
+    return int(row[0]) if row else 0
+
+def children_page(conn: sqlite3.Connection, path: str, limit: int, offset: int):
+    sql_base = """
+        SELECT i.*, m.*
         FROM items i
         LEFT JOIN meta m ON m.rel = i.rel
-        WHERE i.is_dir = 0
-          AND (
-            i.name LIKE ? OR
-            m.title LIKE ? OR
-            m.series LIKE ? OR
-            m.writer LIKE ? OR
-            m.publisher LIKE ?
-          )
-        ORDER BY COALESCE(m.series, i.name), CAST(COALESCE(NULLIF(m.number,''), '0') AS INTEGER), i.name
-        LIMIT ? OFFSET ?
-        """,
-        (like, like, like, like, like, limit, offset),
-    ).fetchall()
+    """
+    if path == "":
+        sql = sql_base + " WHERE i.parent='' ORDER BY i.is_dir DESC, i.name LIMIT ? OFFSET ?"
+        return conn.execute(sql, (limit, offset)).fetchall()
+    else:
+        sql = sql_base + " WHERE i.parent=? ORDER BY i.is_dir DESC, i.name LIMIT ? OFFSET ?"
+        return conn.execute(sql, (path, limit, offset)).fetchall()
 
-def search_count(conn, q: str) -> int:
-    like = f"%{q}%"
-    row = conn.execute(
-        """
+def get_item(conn: sqlite3.Connection, rel: str):
+    return conn.execute("""
+        SELECT i.*, m.*
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.rel=?
+    """, (rel,)).fetchone()
+
+# ----------------------------- Search (FTS5 optional + year) ------------------
+
+_year_re = re.compile(r"\b(19|20)\d{2}\b")
+
+def _split_query(q: str) -> Tuple[List[str], List[str]]:
+    tokens = re.findall(r"[A-Za-z0-9]+", q or "")
+    years  = [t for t in tokens if _year_re.fullmatch(t)]
+    words  = [t for t in tokens if t not in years]
+    return words, years
+
+def _like_term(s: str) -> str:
+    return f"%{s}%"
+
+def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
+    words, years = _split_query(q)
+    params: List[Any] = []
+    where: List[str] = ["i.is_dir=0"]
+
+    if HAS_FTS5 and words:
+        match = " AND ".join([f"{w}*" for w in words])
+        where.append("i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)")
+        params.append(match)
+    elif words:
+        # Fallback LIKEs on selected columns
+        for w in words:
+            where.append("""
+            (
+              i.name LIKE ? OR
+              m.title LIKE ? OR
+              m.series LIKE ? OR
+              m.writer LIKE ? OR
+              m.publisher LIKE ?
+            )
+            """)
+            like = _like_term(w)
+            params.extend([like, like, like, like, like])
+
+    if years:
+        where.append("(" + " OR ".join(["m.year=?" for _ in years]) + ")")
+        params.extend(years)
+
+    sql = f"""
+    SELECT i.*, m.*
+    FROM items i
+    LEFT JOIN meta m ON m.rel = i.rel
+    WHERE {' AND '.join(where)}
+    ORDER BY
+      COALESCE(m.series, i.name),
+      CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER),
+      i.name
+    LIMIT ? OFFSET ?
+    """
+    params.extend([limit, offset])
+    return conn.execute(sql, params).fetchall()
+
+def search_count(conn: sqlite3.Connection, q: str) -> int:
+    words, years = _split_query(q)
+    params: List[Any] = []
+    where: List[str] = ["i.is_dir=0"]
+
+    if HAS_FTS5 and words:
+        match = " AND ".join([f"{w}*" for w in words])
+        where.append("i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)")
+        params.append(match)
+    elif words:
+        for w in words:
+            where.append("""
+            (
+              i.name LIKE ? OR
+              m.title LIKE ? OR
+              m.series LIKE ? OR
+              m.writer LIKE ? OR
+              m.publisher LIKE ?
+            )
+            """)
+            like = _like_term(w)
+            params.extend([like, like, like, like, like])
+
+    if years:
+        where.append("(" + " OR ".join(["m.year=?" for _ in years]) + ")")
+        params.extend(years)
+
+    row = conn.execute(f"""
         SELECT COUNT(*)
         FROM items i
         LEFT JOIN meta m ON m.rel = i.rel
-        WHERE i.is_dir = 0
-          AND (
-            i.name LIKE ? OR
-            m.title LIKE ? OR
-            m.series LIKE ? OR
-            m.writer LIKE ? OR
-            m.publisher LIKE ?
-          )
-        """,
-        (like, like, like, like, like),
-    ).fetchone()
-    return int(row[0] if row else 0)
+        WHERE {' AND '.join(where)}
+    """, params).fetchone()
+    return int(row[0]) if row else 0
 
+# ----------------------------- Smart Lists ------------------------------------
 
-# ------- smart list (advanced) dynamic WHERE builder -------
+FIELD_MAP = {
+    "title": "m.title",
+    "series": "m.series",
+    "number": "m.number",
+    "volume": "m.volume",
+    "year": "m.year",
+    "month": "m.month",
+    "day": "m.day",
+    "writer": "m.writer",
+    "publisher": "m.publisher",
+    "summary": "m.summary",
+    "genre": "m.genre",
+    "tags": "m.tags",
+    "characters": "m.characters",
+    "teams": "m.teams",
+    "locations": "m.locations",
+    "filename": "i.name",
+    "name": "i.name",
+}
 
-def smartlist_query(conn: sqlite3.Connection, groups: list[dict], sort: str, limit: int, offset: int, distinct_series: bool) -> list[sqlite3.Row]:
-    # Build WHERE (groups ORed, rules ANDed)
-    where_parts = []
-    params: list[Any] = []
-    for g in groups or []:
-        rules = g.get("rules") or []
-        if not rules:
-            continue
-        sub, sub_p = _rules_to_where(rules)
-        if sub:
-            where_parts.append(f"({sub})")
-            params.extend(sub_p)
-    where_sql = " AND ".join(["i.is_dir=0"]) if not where_parts else "i.is_dir=0 AND (" + " OR ".join(where_parts) + ")"
+NUMERIC_FIELDS = {"number", "volume", "year", "month", "day"}
 
-    order_sql = {
-        "issued_desc": "issued_sort DESC, series_sort ASC, num_sort ASC",
-        "series_number": "series_sort ASC, num_sort ASC, title_sort ASC",
-        "title": "title_sort ASC",
-        "publisher": "publisher_sort ASC, series_sort ASC",
-    }.get((sort or "").lower(), "issued_sort DESC, series_sort ASC, num_sort ASC")
+def _field_sql(field: str) -> str:
+    f = (field or "").lower()
+    col = FIELD_MAP.get(f)
+    if not col:
+        if f in ("title","series","number","volume","year","month","day","writer","publisher",
+                 "summary","genre","tags","characters","teams","locations"):
+            col = f"m.{f}"
+        else:
+            col = "i.name"
+    return col
 
-    base_select = f"""
-    SELECT i.rel,i.name,i.is_dir,i.size,i.mtime,i.ext,
-           m.title,m.series,m.number,m.volume,m.publisher,m.writer,m.year,m.month,m.day,
-           m.summary,m.languageiso,m.comicvineissue,m.genre,m.tags,m.characters,m.teams,m.locations,
-           LOWER(COALESCE(m.series,i.name)) AS series_sort,
-           CAST(REPLACE(m.number, ',', '.') AS REAL) AS num_sort,
-           LOWER(COALESCE(m.title,i.name)) AS title_sort,
-           LOWER(COALESCE(m.publisher,'')) AS publisher_sort,
-           printf('%04d-%02d-%02d',
-                  CASE WHEN m.year GLOB '[0-9]*' THEN CAST(m.year AS INT) ELSE 0 END,
-                  CASE WHEN m.month GLOB '[0-9]*' THEN CAST(m.month AS INT) ELSE 1 END,
-                  CASE WHEN m.day GLOB '[0-9]*' THEN CAST(m.day AS INT) ELSE 1 END
-           ) AS issued_sort
-    FROM items i LEFT JOIN meta m ON m.rel=i.rel
-    WHERE {where_sql}
-    """
+def _numeric_cast(col: str, field: str) -> str:
+    return f"CAST(COALESCE(NULLIF({col},''),'0') AS INTEGER)" if field in NUMERIC_FIELDS else col
 
-    if distinct_series:
-        # latest per series
-        q = f"""
-        WITH ranked AS (
-          {base_select}
-        )
-        SELECT * FROM ranked
-        WHERE series_sort <> ''
-        QUALIFY ROW_NUMBER() OVER (PARTITION BY series_sort ORDER BY issued_sort DESC, num_sort DESC) = 1
-        ORDER BY {order_sql}
+def _rule_to_sql(rule: Dict[str, Any]) -> Tuple[str, List[Any]]:
+    field = (rule.get("field") or "").lower()
+    op    = (rule.get("op") or "contains").lower()
+    val   = rule.get("value")
+    negate = bool(rule.get("not", False))
+
+    col = _field_sql(field)
+    col_cmp = _numeric_cast(col, field)
+
+    sql = ""
+    params: List[Any] = []
+
+    if op == "exists":
+        sql = f"({col} IS NOT NULL AND {col}!='')"
+    elif op == "missing":
+        sql = f"({col} IS NULL OR {col}='')"
+    elif op == "equals":
+        sql = f"{col} = ?"
+        params = [val]
+    elif op == "contains":
+        sql = f"{col} LIKE ?"
+        params = [f"%{val}%"]
+    elif op == "startswith":
+        sql = f"{col} LIKE ?"
+        params = [f"{val}%"]
+    elif op == "endswith":
+        sql = f"{col} LIKE ?"
+        params = [f"%{val}"]
+    elif op in ("gt","gte","lt","lte"):
+        op_map = {"gt":">","gte":">=","lt":"<","lte":"<="}
+        sql = f"{col_cmp} {op_map[op]} ?"
+        params = [val]
+    else:
+        sql = f"{col} LIKE ?"
+        params = [f"%{val}%"]
+
+    if negate:
+        sql = f"NOT ({sql})"
+
+    return sql, params
+
+def _groups_to_where(groups: List[Dict[str, Any]]) -> Tuple[str, List[Any]]:
+    if not groups:
+        return "1=1", []
+
+    clauses: List[str] = []
+    params: List[Any]  = []
+
+    for g in groups:
+        rs = g.get("rules") or []
+        r_sqls: List[str] = []
+        r_params: List[Any] = []
+        for r in rs:
+            s, p = _rule_to_sql(r)
+            r_sqls.append(s)
+            r_params.extend(p)
+        if r_sqls:
+            clauses.append("(" + " AND ".join(r_sqls) + ")")
+            params.extend(r_params)
+
+    if not clauses:
+        return "1=1", []
+    return "(" + " OR ".join(clauses) + ")", params
+
+def _order_by_for_sort(sort: str) -> str:
+    s = (sort or "").lower()
+    if s == "issued_asc":
+        return "CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) ASC, " \
+               "CAST(COALESCE(NULLIF(m.month,''),'0') AS INTEGER) ASC, " \
+               "CAST(COALESCE(NULLIF(m.day,''),'0') AS INTEGER) ASC, i.name ASC"
+    if s == "issued_desc":
+        return "CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) DESC, " \
+               "CAST(COALESCE(NULLIF(m.month,''),'0') AS INTEGER) DESC, " \
+               "CAST(COALESCE(NULLIF(m.day,''),'0') AS INTEGER) DESC, i.name ASC"
+    if s == "series_asc":
+        return "COALESCE(m.series, i.name) ASC, i.name ASC"
+    if s == "series_desc":
+        return "COALESCE(m.series, i.name) DESC, i.name ASC"
+    if s == "title_asc":
+        return "COALESCE(m.title, i.name) ASC"
+    if s == "title_desc":
+        return "COALESCE(m.title, i.name) DESC"
+    if s == "added_asc":
+        return "i.mtime ASC"
+    if s == "added_desc":
+        return "i.mtime DESC"
+    return "COALESCE(m.series, i.name) ASC, " \
+           "CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER) ASC, i.name ASC"
+
+def smartlist_query(conn: sqlite3.Connection, groups: List[Dict[str, Any]], sort: str,
+                    limit: int, offset: int, distinct_by_series: bool):
+    where, params = _groups_to_where(groups)
+    order_clause = _order_by_for_sort(sort)
+
+    if not distinct_by_series:
+        sql = f"""
+        SELECT i.*, m.*
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.is_dir=0 AND {where}
+        ORDER BY {order_clause}
         LIMIT ? OFFSET ?
         """
-        # QUALIFY / WINDOW ROW_NUMBER needs SQLite 3.43+. If your SQLite is older, emulate with correlated subquery:
-        try:
-            return conn.execute(q, (*params, limit, offset)).fetchall()
-        except sqlite3.OperationalError:
-            q2 = f"""
-            WITH ranked AS (
-              {base_select}
-            )
-            SELECT r1.* FROM ranked r1
-            WHERE NOT EXISTS (
-              SELECT 1 FROM ranked r2
-              WHERE r2.series_sort=r1.series_sort
-                AND (r2.issued_sort>r1.issued_sort OR (r2.issued_sort=r1.issued_sort AND r2.num_sort>r1.num_sort))
-            )
-            ORDER BY {order_sql}
-            LIMIT ? OFFSET ?
-            """
-            return conn.execute(q2, (*params, limit, offset)).fetchall()
-    else:
-        q = f"""{base_select}
-        ORDER BY {order_sql}
-        LIMIT ? OFFSET ?"""
-        return conn.execute(q, (*params, limit, offset)).fetchall()
+        return conn.execute(sql, (*params, limit, offset)).fetchall()
 
+    # Portable DISTINCT-by-series using a correlated NOT EXISTS:
+    # pick the "newest" per series by (year desc, number desc, mtime desc)
+    sql = f"""
+    SELECT i.*, m.*
+      FROM items i
+      LEFT JOIN meta m ON m.rel = i.rel
+     WHERE i.is_dir=0
+       AND {where}
+       AND (
+         m.series IS NULL OR m.series='' OR
+         NOT EXISTS (
+           SELECT 1
+             FROM items i2
+             LEFT JOIN meta m2 ON m2.rel = i2.rel
+            WHERE i2.is_dir=0
+              AND m2.series = m.series
+              AND (
+                CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) > CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) OR
+                (
+                  CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER)
+                  AND CAST(COALESCE(NULLIF(m2.number,''),'0') AS INTEGER) > CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER)
+                ) OR
+                (
+                  CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER)
+                  AND CAST(COALESCE(NULLIF(m2.number,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER)
+                  AND i2.mtime > i.mtime
+                )
+              )
+         )
+       )
+    ORDER BY {order_clause}
+    LIMIT ? OFFSET ?
+    """
+    return conn.execute(sql, (*params, limit, offset)).fetchall()
 
-def smartlist_count(conn: sqlite3.Connection, groups: list[dict]) -> int:
-    where_parts = []
-    params: list[Any] = []
-    for g in groups or []:
-        rules = g.get("rules") or []
-        if not rules:
-            continue
-        sub, sub_p = _rules_to_where(rules)
-        if sub:
-            where_parts.append(f"({sub})")
-            params.extend(sub_p)
-    where_sql = " AND ".join(["i.is_dir=0"]) if not where_parts else "i.is_dir=0 AND (" + " OR ".join(where_parts) + ")"
-    q = f"SELECT COUNT(*) FROM items i LEFT JOIN meta m ON m.rel=i.rel WHERE {where_sql}"
-    return conn.execute(q, params).fetchone()[0]
+def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> int:
+    where, params = _groups_to_where(groups)
+    row = conn.execute(f"""
+        SELECT COUNT(*)
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.is_dir=0 AND {where}
+    """, params).fetchone()
+    return int(row[0]) if row else 0
 
+# ----------------------------- Stats ------------------------------------------
 
-def _rules_to_where(rules: list[dict]) -> tuple[str, list[Any]]:
-    parts = []
-    params: list[Any] = []
-    for r in rules:
-        field = (r.get("field") or "").lower()
-        op = (r.get("op") or "contains").lower()
-        val = (r.get("value") or "").strip()
-        neg = bool(r.get("not", False))
+def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
 
-        # map field -> column/expression
-        col = {
-            "rel": "i.rel", "title": "IFNULL(m.title,i.name)", "series": "m.series",
-            "number": "m.number", "volume": "m.volume", "publisher": "m.publisher",
-            "imprint": "m.imprint", "writer": "m.writer", "characters":"m.characters",
-            "teams":"m.teams", "tags":"IFNULL(m.tags,m.genre)", "genre":"m.genre",
-            "year":"m.year", "month":"m.month", "day":"m.day",
-            "languageiso":"m.languageiso", "comicvineissue":"m.comicvineissue",
-            "ext":"i.ext", "size":"i.size", "mtime":"i.mtime",
-        }.get(field, None)
+    # Core counts
+    out["total_comics"] = conn.execute(
+        "SELECT COUNT(*) FROM items WHERE is_dir=0"
+    ).fetchone()[0]
 
-        if op in ("exists","missing"):
-            expr = f"{col} IS NOT NULL AND {col} <> ''" if col else "0"
-            p = f"({expr})"
-            parts.append(f"NOT {p}" if (neg ^ (op=='missing')) else p)
-            continue
+    out["unique_series"] = conn.execute("""
+        SELECT COUNT(DISTINCT series)
+          FROM meta
+         WHERE series IS NOT NULL AND TRIM(series)!=''
+    """).fetchone()[0]
 
-        if col is None:
-            continue
+    out["publishers"] = conn.execute("""
+        SELECT COUNT(DISTINCT publisher)
+          FROM meta
+         WHERE publisher IS NOT NULL AND TRIM(publisher)!=''
+    """).fetchone()[0]
 
-        if op in ("=","==","!=","<",">","<=",">=") and field in ("size","mtime","year","month","day","number","volume"):
-            cmp_col = f"CAST({col} AS REAL)" if field in ("year","month","day","number","volume") else col
-            p = f"{cmp_col} {op if op!='==' else '='} ?"
-            parts.append(("NOT " if neg else "") + p)
-            params.append(float(val) if val else 0)
-            continue
+    out["last_updated"] = conn.execute(
+        "SELECT MAX(mtime) FROM items"
+    ).fetchone()[0]
 
-        if op in ("on","before","after","between") and field in ("year","month","day"):
-            # synthesize issued string Y-M-D and compare lexicographically
-            issued = "printf('%04d-%02d-%02d', CAST(m.year AS INT), CAST(m.month AS INT), CAST(m.day AS INT))"
-            if op == "between":
-                try:
-                    a,b = [x.strip() for x in val.split(",",1)]
-                except ValueError:
-                    continue
-                p = f"{issued} BETWEEN ? AND ?"
-                parts.append(("NOT " if neg else "") + p)
-                params.extend([_normalize_date(a), _normalize_date(b)])
-            else:
-                sym = {"on":"=","before":"<","after":">"}[op]
-                p = f"{issued} {sym} ?"
-                parts.append(("NOT " if neg else "") + p)
-                params.append(_normalize_date(val))
-            continue
+    # Publishers breakdown (top N) — used by doughnut chart
+    top_pubs = [
+        {"publisher": row[0], "count": row[1]}
+        for row in conn.execute("""
+           SELECT IFNULL(NULLIF(TRIM(m.publisher),''),'(Unknown)') AS publisher,
+                  COUNT(*) AS c
+             FROM items i
+             LEFT JOIN meta m ON m.rel=i.rel
+            WHERE i.is_dir=0
+            GROUP BY publisher
+            ORDER BY c DESC
+            LIMIT 20
+        """)
+    ]
+    out["top_publishers"] = top_pubs                     # existing name
+    out["publishers_breakdown"] = top_pubs              # alias for dashboards that expect this
 
-        # text ops
-        if op == "regex":
-            # SQLite has no native regex; fallback to LIKE
-            like = f"%{val.lower()}%"
-            p = f"LOWER({col}) LIKE ?"
-            parts.append(("NOT " if neg else "") + p)
-            params.append(like)
-        else:
-            if op == "equals":
-                p = f"LOWER({col}) = ?"; params.append(val.lower())
-            elif op == "contains":
-                p = f"LOWER({col}) LIKE ?"; params.append(f"%{val.lower()}%")
-            elif op == "startswith":
-                p = f"LOWER({col}) LIKE ?"; params.append(f"{val.lower()}%")
-            elif op == "endswith":
-                p = f"LOWER({col}) LIKE ?"; params.append(f"%{val.lower()}")
-            else:
-                continue
-            parts.append(("NOT " if neg else "") + p)
+    # Publication timeline by year (ascending) — used by line chart
+    timeline = [
+        {"year": int(row[0]), "count": row[1]}
+        for row in conn.execute("""
+           SELECT CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) AS y,
+                  COUNT(*) AS c
+             FROM items i
+             LEFT JOIN meta m ON m.rel=i.rel
+            WHERE i.is_dir=0 AND TRIM(m.year)!=''
+            GROUP BY y
+            ORDER BY y ASC
+        """)
+        if row[0] is not None
+    ]
+    out["timeline_by_year"] = timeline                   # new
+    out["publication_timeline"] = timeline               # alias (some dashboards used this name)
 
-    return (" AND ".join(parts), params)
+    # Top writers (split on commas, normalized) — used by horizontal bar chart
+    rows = conn.execute("""
+        SELECT m.writer
+          FROM items i
+          LEFT JOIN meta m ON m.rel=i.rel
+         WHERE i.is_dir=0 AND m.writer IS NOT NULL AND TRIM(m.writer)!=''
+    """).fetchall()
 
+    counts: Dict[str, int] = {}
+    for (w,) in rows:
+        for name in (x.strip() for x in w.split(",") if x.strip()):
+            key = name.lower()
+            counts[key] = counts.get(key, 0) + 1
 
-def _normalize_date(s: str) -> str:
-    s = (s or "").strip()
-    if not s:
-        return "0000-01-01"
-    parts = s.split("-")
-    try:
-        if len(parts) == 1:
-            y = int(parts[0]); return f"{y:04d}-01-01"
-        if len(parts) == 2:
-            y = int(parts[0]); m = int(parts[1]); return f"{y:04d}-{m:02d}-01"
-        if len(parts) == 3:
-            y = int(parts[0]); m = int(parts[1]); d = int(parts[2]); return f"{y:04d}-{m:02d}-{d:02d}"
-    except Exception:
-        pass
-    return "0000-01-01"
+    top_writers = sorted(
+        ({"writer": name.title(), "count": c} for name, c in counts.items()),
+        key=lambda d: d["count"],
+        reverse=True,
+    )[:20]
+
+    out["top_writers"] = top_writers
+
+    return out
+

@@ -27,7 +27,7 @@ from .thumbs import have_thumb, generate_thumb
 from . import db  # SQLite adapter
 
 # -------------------- Logging --------------------
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
 app_logger = logging.getLogger("comicopds")
 app_logger.setLevel(LOG_LEVEL)
 _handler = logging.StreamHandler(sys.stdout)
@@ -202,10 +202,23 @@ def _start_scan(force=False):
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
+@app.get("/debug/fts")
+def debug_fts(_=Depends(require_basic)):
+    return {"fts5": db.has_fts5()}
+
 @app.on_event("startup")
 def startup():
     if not LIBRARY_DIR.exists():
        raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
+
+    # Show SQLite version + FTS status in logs
+    conn = db.connect()
+    try:
+        sqlite_version = conn.execute("select sqlite_version()").fetchone()[0]
+    finally:
+        conn.close()
+    app_logger.info(f"SQLite version: {sqlite_version}")
+    app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
 
     if AUTO_INDEX_ON_START:
         _start_scan(force=True)

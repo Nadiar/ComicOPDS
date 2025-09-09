@@ -826,50 +826,61 @@ def smartlists_page(_=Depends(require_basic)):
     tpl = env.get_template("smartlists.html")
     return HTMLResponse(tpl.render())
 
+def _smartlists_load():
+    if SMARTLISTS_PATH.exists():
+        try:
+            with SMARTLISTS_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            # support legacy wrapper { "lists": [...] }
+            if isinstance(data, dict) and "lists" in data and isinstance(data["lists"], list):
+                return data["lists"]
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return []  # default
+
+def _smartlists_save(lists):
+    # backup old file
+    if SMARTLISTS_PATH.exists():
+        ts = time.strftime("%Y%m%d-%H%M%S")
+        SMARTLISTS_PATH.rename(SMARTLISTS_PATH.with_suffix(f".{ts}.bak"))
+    with SMARTLISTS_PATH.open("w", encoding="utf-8") as f:
+        json.dump(lists, f, ensure_ascii=False, indent=2)
+
 @app.get("/smartlists.json", response_class=JSONResponse)
 def smartlists_get(_=Depends(require_basic)):
-    return JSONResponse(_load_smartlists())
+    """Return the raw JSON array of smart lists (or [] if none)."""
+    return JSONResponse(_smartlists_load())
 
 @app.post("/smartlists.json", response_class=JSONResponse)
-def smartlists_post(payload: list[dict], _=Depends(require_basic)):
-    lists: list[dict] = []
-    for sl in (payload or []):
-        name = (sl.get("name") or "Smart List").strip()
-        slug = _slugify(sl.get("slug") or name)
-        groups = sl.get("groups") or []
+async def smartlists_post(request: Request, _=Depends(require_basic)):
+    raw = await request.body()
+    if not raw:
+        return JSONResponse({"ok": False, "error": "empty body"}, status_code=400)
 
-        norm_groups = []
-        for g in groups:
-            rules = []
-            for r in (g.get("rules") or []):
-                op = (r.get("op") or "contains").lower()
-                val = (r.get("value") or "")
-                if not val.strip() and op not in ("exists", "missing"):
-                    continue
-                rules.append(
-                    {
-                        "field": (r.get("field") or "").lower(),
-                        "op": op,
-                        "value": val,
-                        "not": bool(r.get("not", False)),
-                    }
-                )
-            if rules:
-                norm_groups.append({"rules": rules})
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"invalid json: {e}"}, status_code=400)
 
-        lists.append(
-            {
-                "name": name,
-                "slug": slug,
-                "groups": norm_groups,
-                "sort": (sl.get("sort") or "issued_desc").lower(),
-                "limit": int(sl.get("limit") or 0),
-                "distinct_by": (sl.get("distinct_by") or ""),
-            }
-        )
+    if isinstance(data, dict) and "lists" in data and isinstance(data["lists"], list):
+        lists = data["lists"]
+    elif isinstance(data, dict):
+        lists = [data]
+    elif isinstance(data, list):
+        lists = data
+    else:
+        return JSONResponse({"ok": False, "error": "expected JSON array or object"}, status_code=400)
 
-    _save_smartlists(lists)
-    return JSONResponse({"ok": True, "count": len(lists)})
+    try:
+        _smartlists_save(lists)
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"write failed: {e}"}, status_code=500)
+
+    return JSONResponse({"ok": True, "saved": len(lists)})
+
+
 
 # -------------------- Index status & Reindex --------------------
 @app.get("/index/status", response_class=JSONResponse)

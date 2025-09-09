@@ -225,10 +225,15 @@
     }
 
     async function saveLists(lists) {
-      await fetch('/smartlists.json', {
-        method: 'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
-        body: JSON.stringify(lists)
+      const res = await fetch('/smartlists.json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(lists)   // <-- must be an array
       });
+      if (!res.ok) {
+        alert("Failed to save smartlists: " + res.status);
+      }
     }
 
     document.getElementById('addGroup').onclick = () => addGroup();

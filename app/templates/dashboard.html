@@ -32,8 +32,8 @@
       <div class="ms-auto d-flex align-items-center gap-2">
         <span class="navbar-text small text-secondary me-2">
           <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
-          <!-- NEW: errors badge + download link -->
-          • Errors: <a id="errLink" href="/thumbs/errors/log" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
+          <!-- errors badge + download link -->
+          • Errors: <a id="errLink" href="#" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
         </span>
         <button id="thumbsBtn" class="btn btn-sm btn-outline-primary">
           <i class="bi bi-images me-1"></i> Pre-cache Thumbnails
@@ -245,6 +245,30 @@
       setTimeout(pollIndex, delay);
     }
 
+
+    async function downloadErrors() {
+      try {
+        const resp = await fetch("/thumbs/errors/log", { credentials: "include" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "thumbs_errors.log";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        alert("Download failed: " + (e?.message || e));
+      }
+    }
+
+    document.getElementById("errLink").addEventListener("click", (ev) => {
+      ev.preventDefault();
+      downloadErrors();
+    });
+
     // ----- Thumbnails pre-cache progress -----
     async function pollThumbs(){
       let delay=5000;
@@ -311,8 +335,6 @@
     pollIndex();
     pollThumbs();
     pollErrors();
-
-    window.addEventListener("beforeunload", ()=>{ Object.values(Chart.instances||{}).forEach(c=>{ try{c.destroy()}catch{}}); });
   </script>
 </body>
 </html>

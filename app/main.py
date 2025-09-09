@@ -804,20 +804,39 @@ def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
 
     groups = sl.get("groups") or []
     sort = (sl.get("sort") or "issued_desc").lower()
-    distinct_by = (sl.get("distinct_by") or "") == "series"
 
-    start = (page - 1) * PAGE_SIZE
+    # Distinct handling (series+volume) + mode
+    distinct_by   = (sl.get("distinct_by") or "").strip().lower()
+    distinct_mode = (sl.get("distinct_mode") or "latest").strip().lower()
+    distinct_flag = distinct_mode if distinct_by == "series_volume" else False  # db.smartlist_query expects False | "latest" | "oldest"
+
+    # Hard cap per list
+    sl_limit = int(sl.get("limit") or 0)
+
+    # paging
+    page = max(1, int(page))
+    page_size = PAGE_SIZE
+    start = (page - 1) * page_size
+
+    # effective page size when a hard cap exists
+    effective_page_size = page_size if sl_limit == 0 else max(0, min(page_size, sl_limit - start))
 
     conn = db.connect()
     try:
-        rows = db.smartlist_query(conn, groups, sort, PAGE_SIZE, start, distinct_by)
+        rows = db.smartlist_query(conn, groups, sort, effective_page_size, start, distinct_flag)
         total = db.smartlist_count(conn, groups)
     finally:
         conn.close()
 
+    # Total for navigation honors the hard cap
+    total_for_nav = min(total, sl_limit) if sl_limit > 0 else total
+
     entries_xml = [_entry_xml_from_row(r) for r in rows]
     self_href = f"/opds/smart/{quote(slug)}?page={page}"
-    next_href = f"/opds/smart/{quote(slug)}?page={page+1}" if (start + PAGE_SIZE) < total else None
+    next_href = None
+    if (start + len(rows)) < total_for_nav:
+        next_href = f"/opds/smart/{quote(slug)}?page={page+1}"
+
     xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 

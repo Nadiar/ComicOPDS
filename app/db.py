@@ -452,6 +452,12 @@ def _order_by_for_sort(sort: str) -> str:
         return "COALESCE(m.title, i.name) ASC"
     if s == "title_desc":
         return "COALESCE(m.title, i.name) DESC"
+    if s == "publisher":
+        return "COALESCE(m.publisher, '') COLLATE NOCASE ASC, m.series COLLATE NOCASE ASC, i.name ASC"
+    if s == "title":
+        return "COALESCE(m.title, i.name) COLLATE NOCASE ASC"
+    if s == "series_number":
+        return "COALESCE(m.series, i.name) COLLATE NOCASE ASC, CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER) ASC, i.name ASC"
     if s == "added_asc":
         return "i.mtime ASC"
     if s == "added_desc":
@@ -459,30 +465,95 @@ def _order_by_for_sort(sort: str) -> str:
     return "COALESCE(m.series, i.name) ASC, " \
            "CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER) ASC, i.name ASC"
 
-def smartlist_query(conn: sqlite3.Connection, groups: List[Dict[str, Any]], sort: str,
-                    limit: int, offset: int, distinct_by_series: bool):
-    # Build WHERE from groups (OR supply a full spec if you prefer)
+# ---- FTS prefilter for smartlists (speeds up 'contains' text rules) ----
+
+_TEXT_FIELDS_FOR_FTS = {
+    "title","series","publisher","writer","summary","genre",
+    "tags","characters","teams","locations","name","filename"
+}
+
+def _extract_fts_terms_from_groups(groups: List[Dict[str, Any]]) -> List[str]:
+    terms: List[str] = []
+    for g in (groups or []):
+        for r in (g.get("rules") or []):
+            field = (r.get("field") or "").lower()
+            op    = (r.get("op") or "").lower()
+            val   = r.get("value")
+            if field in _TEXT_FIELDS_FOR_FTS and op in ("contains","~") and isinstance(val, str) and not r.get("not"):
+                tokens = re.findall(r"[0-9A-Za-z]{2,}", val)
+                terms.extend(t + "*" for t in tokens)
+    return terms
+
+# ---- Smartlist runners --------------------------------------------------------
+
+def smartlist_query(
+    conn: sqlite3.Connection,
+    groups: List[Dict[str, Any]],
+    sort: str,
+    limit: int,
+    offset: int,
+    distinct_by_series: bool
+):
+    """
+    Backward-compatible API (used by existing routes).
+    - Adds FTS prefilter when possible.
+    - If distinct_by_series is 'latest' or 'oldest' (string), uses that mode.
+      If True, defaults to 'latest'.
+    """
     where, params = build_smartlist_where(groups)
     order_clause = _order_by_for_sort(sort)
 
-    if not distinct_by_series:
+    # Optional FTS prefilter
+    fts_sql = ""
+    fts_params: List[Any] = []
+    if HAS_FTS5:
+        tokens = _extract_fts_terms_from_groups(groups)
+        if tokens:
+            fts_sql = " AND i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)"
+            fts_params = [" AND ".join(tokens)]
+
+    # Distinct mode handling
+    mode = "latest"
+    if isinstance(distinct_by_series, str) and distinct_by_series in ("latest", "oldest"):
+        use_distinct = True
+        mode = distinct_by_series
+    else:
+        use_distinct = bool(distinct_by_series)
+
+    if not use_distinct:
         sql = f"""
         SELECT i.*, m.*
-        FROM items i
-        LEFT JOIN meta m ON m.rel = i.rel
-        WHERE i.is_dir=0 AND {where}
-        ORDER BY {order_clause}
-        LIMIT ? OFFSET ?
+          FROM items i
+          LEFT JOIN meta m ON m.rel = i.rel
+         WHERE i.is_dir=0 AND {where}{fts_sql}
+         ORDER BY {order_clause}
+         LIMIT ? OFFSET ?
         """
-        return conn.execute(sql, (*params, limit, offset)).fetchall()
+        return conn.execute(sql, (*params, *fts_params, limit, offset)).fetchall()
 
-    # DISTINCT by series (pick "newest" per series)
+    # DISTINCT by (series, volume), with latest/oldest mode
+    cmp_year   = "CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) {op} CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER)"
+    cmp_number = "CAST(COALESCE(NULLIF(m2.number,''),'0') AS INTEGER) {op} CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER)"
+    cmp_mtime  = "i2.mtime {op} i.mtime"
+
+    if mode == "oldest":
+        op_main, op_eq, op_time = "<", "=", "<"
+    else:
+        op_main, op_eq, op_time = ">", "=", ">"
+
+    dominance = f"""
+        (
+          {cmp_year.format(op=op_main)} OR
+          ({cmp_year.format(op=op_eq)} AND {cmp_number.format(op=op_main)}) OR
+          ({cmp_year.format(op=op_eq)} AND {cmp_number.format(op=op_eq)} AND {cmp_mtime.format(op=op_time)})
+        )
+    """
+
     sql = f"""
     SELECT i.*, m.*
       FROM items i
       LEFT JOIN meta m ON m.rel = i.rel
-     WHERE i.is_dir=0
-       AND {where}
+     WHERE i.is_dir=0 AND {where}{fts_sql}
        AND (
          m.series IS NULL OR m.series='' OR
          NOT EXISTS (
@@ -490,34 +561,33 @@ def smartlist_query(conn: sqlite3.Connection, groups: List[Dict[str, Any]], sort
              FROM items i2
              LEFT JOIN meta m2 ON m2.rel = i2.rel
             WHERE i2.is_dir=0
-              AND m2.series = m.series AND m2.volume = m.volume
-              AND (
-                CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) > CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) OR
-                (
-                  CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER)
-                  AND CAST(COALESCE(NULLIF(m2.number,''),'0') AS INTEGER) > CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER)
-                ) OR
-                (
-                  CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER)
-                  AND CAST(COALESCE(NULLIF(m2.number,''),'0') AS INTEGER) = CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER)
-                  AND i2.mtime > i.mtime
-                )
-              )
+              AND m2.series = m.series
+              AND COALESCE(m2.volume,'') = COALESCE(m.volume,'')
+              AND {dominance}
          )
        )
     ORDER BY {order_clause}
     LIMIT ? OFFSET ?
     """
-    return conn.execute(sql, (*params, limit, offset)).fetchall()
+    return conn.execute(sql, (*params, *fts_params, limit, offset)).fetchall()
 
 def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> int:
     where, params = build_smartlist_where(groups)
+
+    fts_sql = ""
+    fts_params: List[Any] = []
+    if HAS_FTS5:
+        tokens = _extract_fts_terms_from_groups(groups)
+        if tokens:
+            fts_sql = " AND i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)"
+            fts_params = [" AND ".join(tokens)]
+
     row = conn.execute(f"""
         SELECT COUNT(*)
-        FROM items i
-        LEFT JOIN meta m ON m.rel = i.rel
-        WHERE i.is_dir=0 AND {where}
-    """, params).fetchone()
+          FROM items i
+          LEFT JOIN meta m ON m.rel = i.rel
+         WHERE i.is_dir=0 AND {where}{fts_sql}
+    """, (*params, *fts_params)).fetchone()
     return int(row[0]) if row else 0
 
 # ----------------------------- Stats ------------------------------------------
@@ -546,7 +616,7 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
         "SELECT MAX(mtime) FROM items"
     ).fetchone()[0]
 
-    # Publishers breakdown (top N) — used by doughnut chart
+    # Publishers breakdown (top N)
     top_pubs = [
         {"publisher": row[0], "count": row[1]}
         for row in conn.execute("""

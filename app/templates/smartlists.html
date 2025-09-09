@@ -39,7 +39,7 @@
 
             <hr class="my-3">
             <div class="row g-2">
-              <div class="col-12 col-md-5">
+              <div class="col-12 col-md-4">
                 <label class="form-label">Sort</label>
                 <select id="sort" class="form-select">
                   <option value="issued_desc">Issued (newest first)</option>
@@ -48,15 +48,29 @@
                   <option value="publisher">Publisher</option>
                 </select>
               </div>
-              <div class="col-6 col-md-3">
+              <div class="col-6 col-md-2">
                 <label class="form-label">Limit</label>
                 <input id="limit" class="form-control" type="number" min="0" value="0" />
                 <div class="form-text">0 = unlimited</div>
               </div>
-              <div class="col-6 col-md-4 d-flex align-items-end">
-                <div class="form-check mt-3">
-                  <input class="form-check-input" type="checkbox" id="distinctSeries">
-                  <label class="form-check-label" for="distinctSeries">Distinct by series and volume (latest)</label>
+              <div class="col-6 col-md-3">
+                <label class="form-label">Distinct</label>
+                <select id="distinctBy" class="form-select">
+                  <option value="">None</option>
+                  <option value="series_volume">Series + Volume</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-3" id="distinctModeWrap" style="display:none;">
+                <label class="form-label">Pick</label>
+                <div class="d-flex gap-2">
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="distinctMode" id="dmLatest" value="latest" checked>
+                    <label class="form-check-label" for="dmLatest">Latest</label>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="distinctMode" id="dmOldest" value="oldest">
+                    <label class="form-check-label" for="dmOldest">Oldest</label>
+                  </div>
                 </div>
               </div>
             </div>
@@ -68,8 +82,7 @@
 
             <div class="small text-secondary mt-3">
               Rules within a group are <b>AND</b>’d. Groups are <b>OR</b>’d.<br>
-              Date formats: <span class="monosmall">YYYY</span>, <span class="monosmall">YYYY-MM</span>, <span class="monosmall">YYYY-MM-DD</span>.<br>
-              Fields: <span class="monosmall">series, title, number, volume, publisher, imprint, writer, characters, teams, tags, year, month, day, issued, languageiso, comicvineissue, rel, ext, size, mtime, has_thumb, has_meta</span>
+              Fields: <span class="monosmall">series, title, number, volume, publisher, writer, characters, teams, tags, year, month, day, languageiso, comicvineissue, rel, ext, size, mtime</span>
             </div>
           </div>
         </div>
@@ -105,27 +118,22 @@
       <span class="text-secondary small">NOT</span>
       <select class="form-select form-select-sm field">
         <option>series</option><option>title</option><option>number</option><option>volume</option>
-        <option>publisher</option><option>imprint</option><option>writer</option>
+        <option>publisher</option><option>writer</option>
         <option>characters</option><option>teams</option><option>tags</option>
-        <option>year</option><option>month</option><option>day</option><option>issued</option>
+        <option>year</option><option>month</option><option>day</option>
         <option>languageiso</option><option>comicvineissue</option>
         <option>rel</option><option>ext</option><option>size</option><option>mtime</option>
-        <option>has_thumb</option><option>has_meta</option>
       </select>
       <select class="form-select form-select-sm op">
         <option value="contains">contains</option>
         <option value="equals">equals</option>
         <option value="startswith">starts with</option>
         <option value="endswith">ends with</option>
-        <option value="regex">regex</option>
         <option value="=">= (numeric)</option><option value="!=">!= (numeric)</option>
         <option value=">">&gt; (numeric)</option><option value=">=">&gt;= (numeric)</option>
         <option value="<">&lt; (numeric)</option><option value="<=">&lt;= (numeric)</option>
-        <option value="on">on (date)</option><option value="before">before (date)</option><option value="after">after (date)</option>
-        <option value="between">between (date,date)</option>
-        <option value="exists">exists</option><option value="missing">missing</option>
       </select>
-      <input class="form-control form-control-sm value" placeholder="value (leave blank for exists/missing)" />
+      <input class="form-control form-control-sm value" placeholder="value"/>
       <button class="btn btn-sm btn-outline-danger remove-rule"><i class="bi bi-x-lg"></i></button>
     </div>
   </template>
@@ -135,6 +143,13 @@
     const groupsEl = document.getElementById('groups');
     const groupTpl = document.getElementById('groupTpl');
     const ruleTpl = document.getElementById('ruleTpl');
+
+    const distinctBySel = document.getElementById('distinctBy');
+    const distinctModeWrap = document.getElementById('distinctModeWrap');
+
+    distinctBySel.addEventListener('change', () => {
+      distinctModeWrap.style.display = (distinctBySel.value === 'series_volume') ? '' : 'none';
+    });
 
     function addGroup(data) {
       const node = groupTpl.content.cloneNode(true);
@@ -155,7 +170,7 @@
         row.querySelector('.not-flag').checked = !!data.not;
         row.querySelector('.field').value = data.field || 'series';
         row.querySelector('.op').value = data.op || 'contains';
-        row.querySelector('.value').value = data.value || '';
+        row.querySelector('.value').value = (data.value ?? '');
       }
       row.querySelector('.remove-rule').onclick = () => row.remove();
       container.appendChild(node);
@@ -169,7 +184,7 @@
           op: r.querySelector('.op').value,
           value: r.querySelector('.value').value
         }));
-        return { rules: rules.filter(x => x.op === 'exists' || x.op === 'missing' || (x.value && x.value.trim())) };
+        return { rules: rules.filter(x => (x.value && x.value.trim()) || ["exists","missing"].includes(x.op)) };
       }).filter(g => g.rules.length);
     }
 
@@ -177,7 +192,9 @@
       document.getElementById('listName').value = '';
       document.getElementById('sort').value = 'issued_desc';
       document.getElementById('limit').value = '0';
-      document.getElementById('distinctSeries').checked = false;
+      distinctBySel.value = '';
+      distinctModeWrap.style.display = 'none';
+      document.getElementById('dmLatest').checked = true;
       groupsEl.innerHTML = '';
       addGroup({rules:[{field:'series',op:'contains',value:''}]});
     }
@@ -189,15 +206,16 @@
       data.forEach(l => {
         const col = document.createElement('div');
         col.className = 'col-12';
+        const distinctTxt = l.distinct_by ? `${l.distinct_by} (${l.distinct_mode || 'latest'})` : '—';
         col.innerHTML = `
           <div class="card h-100">
             <div class="card-body d-flex justify-content-between align-items-start">
               <div>
                 <div class="fw-semibold">${l.name}</div>
                 <div class="small text-secondary">
-                  ${(l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' "'+r.value.replace(/"/g,'&quot;')+'"').join(' AND ')).join(' <b>OR</b> ') || '—'}
+                  ${(l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' "'+String(r.value||'').replace(/"/g,'&quot;')+'"').join(' AND ')).join(' <b>OR</b> ') || '—'}
                 </div>
-                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${l.distinct_by || '—'}</div>
+                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${distinctTxt}</div>
                 <div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/opds/smart/${l.slug}">Open in OPDS</a></div>
               </div>
               <div class="btn-group btn-group-sm">
@@ -210,7 +228,9 @@
           document.getElementById('listName').value = l.name;
           document.getElementById('sort').value = l.sort || 'issued_desc';
           document.getElementById('limit').value = l.limit || 0;
-          document.getElementById('distinctSeries').checked = (l.distinct_by === 'series');
+          distinctBySel.value = l.distinct_by || '';
+          distinctModeWrap.style.display = (distinctBySel.value === 'series_volume') ? '' : 'none';
+          (l.distinct_mode === 'oldest' ? document.getElementById('dmOldest') : document.getElementById('dmLatest')).checked = true;
           groupsEl.innerHTML = '';
           (l.groups || []).forEach(g => addGroup(g));
         };
@@ -229,7 +249,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(lists)   // <-- must be an array
+        body: JSON.stringify(lists)
       });
       if (!res.ok) {
         alert("Failed to save smartlists: " + res.status);
@@ -245,12 +265,13 @@
       if (!name || groups.length === 0) { alert('Please provide a name and at least one rule.'); return; }
       const sort = document.getElementById('sort').value;
       const limit = parseInt(document.getElementById('limit').value || '0', 10);
-      const distinct_by = document.getElementById('distinctSeries').checked ? 'series' : '';
+      const distinct_by = distinctBySel.value; // '' or 'series_volume'
+      const distinct_mode = document.querySelector('input[name="distinctMode"]:checked').value; // latest|oldest
 
       const lists = await loadLists();
       const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'list');
       const existing = lists.find(l => l.slug === slug) || lists.find(l => l.name === name);
-      const record = { name, slug, groups, sort, limit, distinct_by };
+      const record = { name, slug, groups, sort, limit, distinct_by, distinct_mode };
       if (existing) Object.assign(existing, record); else lists.push(record);
       await saveLists(lists);
       resetForm();

@@ -7,6 +7,7 @@ from fastapi.responses import (
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 import threading
 import time
@@ -20,7 +21,7 @@ import sys
 import logging
 from math import ceil
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
 from .thumbs import have_thumb, generate_thumb
@@ -28,6 +29,7 @@ from . import db  # SQLite adapter
 
 # -------------------- Logging --------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
+ERROR_LOG_PATH = Path("/data/thumbs_errors.log")
 app_logger = logging.getLogger("comicopds")
 app_logger.setLevel(LOG_LEVEL)
 _handler = logging.StreamHandler(sys.stdout)
@@ -69,6 +71,17 @@ async def log_requests(request: Request, call_next):
     except Exception:
         pass
     return resp
+
+# -------------------- Thumbnail state (background) ----------------
+
+_THUMB_STATUS = {
+    "running": False,
+    "total": 0,
+    "done": 0,
+    "started_at": 0.0,
+    "ended_at": 0.0,
+}
+_THUMB_LOCK = threading.Lock()
 
 # -------------------- Index state (background) --------------------
 _INDEX_STATUS = {
@@ -186,6 +199,12 @@ def _run_scan():
                 _index_progress(rel)
 
         db.prune_stale(conn)
+
+        # after scanning and pruning
+        if PRECACHE_THUMBS:
+            _set_status(phase="thumbnails")
+            _run_precache_thumbs(THUMB_WORKERS)
+
         _set_status(phase="idle", running=False, ended_at=time.time(), current="")
     except Exception as e:
         app_logger.error(f"scan error: {e}")
@@ -195,6 +214,55 @@ def _run_scan():
             conn.close()
         except Exception:
             pass
+
+def _collect_cbz_rows() -> list[dict]:
+    """Fetch all file rows (is_dir=0, ext='cbz') with comicvineissue."""
+    conn = db.connect()
+    try:
+        rows = conn.execute("""
+            SELECT i.rel, i.ext, m.comicvineissue
+              FROM items i
+              LEFT JOIN meta m ON m.rel = i.rel
+             WHERE i.is_dir=0 AND LOWER(i.ext)='cbz'
+        """).fetchall()
+        return [{"rel": r["rel"], "cvid": r["comicvineissue"]} for r in rows]
+    finally:
+        conn.close()
+
+def _thumb_task(rel: str, cvid: str | None):
+    try:
+        ensure = generate_thumb  # we’ll call with abs path to avoid second stat
+        abs_cbz = (LIBRARY_DIR / rel)
+        if abs_cbz.exists():
+            ensure(rel, abs_cbz, cvid)
+    except Exception:
+        pass
+    finally:
+        with _THUMB_LOCK:
+            _THUMB_STATUS["done"] += 1
+
+def _run_precache_thumbs(workers: int):
+    with _THUMB_LOCK:
+        _THUMB_STATUS.update({"running": True, "total": 0, "done": 0, "started_at": time.time(), "ended_at": 0.0})
+
+    items = _collect_cbz_rows()
+    total = len(items)
+    with _THUMB_LOCK:
+        _THUMB_STATUS["total"] = total
+
+    if total == 0:
+        with _THUMB_LOCK:
+            _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
+        return
+
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        futures = [pool.submit(_thumb_task, it["rel"], it["cvid"]) for it in items]
+        for _ in as_completed(futures):
+            pass
+
+    with _THUMB_LOCK:
+        _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
+
 
 def _start_scan(force=False):
     if not force and _INDEX_STATUS["running"]:
@@ -223,6 +291,10 @@ def startup():
     if AUTO_INDEX_ON_START:
         _start_scan(force=True)
         return
+    # Run thumbnails pre-cache at startup even if no scan runs    
+    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
+        t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
+        t.start()
 
     conn = db.connect()
     try:
@@ -814,3 +886,48 @@ def index_status(_=Depends(require_basic)):
 def admin_reindex(_=Depends(require_basic)):
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
+
+@app.post("/admin/thumbs/precache", response_class=JSONResponse)
+def admin_thumbs_precache(_=Depends(require_basic)):
+    if _THUMB_STATUS["running"]:
+        return JSONResponse({"ok": True, "started": False, "reason": "already running"})
+    t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
+    t.start()
+    return JSONResponse({"ok": True, "started": True})
+
+@app.get("/thumbs/status", response_class=JSONResponse)
+def thumbs_status(_=Depends(require_basic)):
+    return JSONResponse(_THUMB_STATUS)
+
+# -------------------- Thumbs Errors --------------------
+
+@app.get("/thumbs/errors/count", response_class=JSONResponse)
+def thumbs_errors_count(_=Depends(require_basic)):
+    n = 0
+    size = 0
+    mtime = 0.0
+    if ERROR_LOG_PATH.exists():
+        try:
+            # Fast line count
+            with ERROR_LOG_PATH.open("rb") as f:
+                n = sum(1 for _ in f)
+            st = ERROR_LOG_PATH.stat()
+            size = st.st_size
+            mtime = st.st_mtime
+        except Exception:
+            pass
+    return {"lines": n, "size_bytes": size, "modified": mtime}
+
+@app.get("/thumbs/errors/log")
+def thumbs_errors_log(_=Depends(require_basic)):
+    if not ERROR_LOG_PATH.exists():
+        # return an empty text file to keep the link working
+        return PlainTextResponse("", media_type="text/plain", headers={
+            "Content-Disposition": "attachment; filename=thumbs_errors.log"
+        })
+    return FileResponse(
+        path=str(ERROR_LOG_PATH),
+        media_type="text/plain",
+        filename="thumbs_errors.log",
+        headers={"Cache-Control": "no-store"}
+    )

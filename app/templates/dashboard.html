@@ -1,212 +1,318 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-bs-theme="auto">
 <head>
   <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>ComicOPDS — Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>ComicOPDS — Library Dashboard</title>
 
   <!-- Bootstrap 5 -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Bootstrap Icons (optional) -->
+  <!-- Bootstrap Icons -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
   <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
   <style>
-    body { background: #f8f9fa; }
-    .stat-card { min-height: 120px; }
-    .chart-wrap { position: relative; min-height: 300px; }
-    .empty-overlay {
-      position:absolute; inset:0;
-      display:flex; align-items:center; justify-content:center;
-      font-size:0.95rem; color:#777; pointer-events:none;
-    }
-    .font-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    body { background: var(--bs-body-bg); }
+    .metric { display:flex; align-items:center; gap:.75rem; }
+    .metric .bi { font-size:1.6rem; opacity:.8; }
+    .metric .value { font-size:1.9rem; font-weight:700; line-height:1; }
+    .metric .label { color: var(--bs-secondary-color); font-size:.85rem; }
+    .chart-card canvas { width:100% !important; height:360px !important; }
+    .footer-note { color: var(--bs-secondary-color); }
+    .kpis .card { transition: transform .15s ease; }
+    .kpis .card:hover { transform: translateY(-2px); }
   </style>
 </head>
 <body>
-<div class="container py-4">
+  <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
+    <div class="container">
+      <a class="navbar-brand fw-semibold" href="#"><i class="bi bi-book-half me-2"></i>ComicOPDS</a>
 
-  <div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="h3 mb-0"><i class="bi bi-bar-chart"></i> ComicOPDS Dashboard</h1>
-    <div>
-      <button id="btn-refresh" class="btn btn-info btn-sm me-2"><i class="bi bi-arrow-clockwise"></i> Refresh</button>
-      <button id="btn-reindex" class="btn btn-warning btn-sm"><i class="bi bi-arrow-repeat"></i> Reindex</button>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <span class="navbar-text small text-secondary me-2">
+          <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
+          <!-- NEW: errors badge + download link -->
+          • Errors: <a id="errLink" href="/thumbs/errors/log" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
+        </span>
+        <button id="thumbsBtn" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-images me-1"></i> Pre-cache Thumbnails
+        </button>
+        <button id="reindexBtn" class="btn btn-sm btn-outline-secondary">
+          <i class="bi bi-arrow-repeat me-1"></i> Reindex
+        </button>
+      </div>
     </div>
-  </div>
+  </nav>
 
-  <!-- Indexing status -->
-  <div id="indexBox" class="alert alert-info py-2" style="display:none;">
-    <strong>Indexing:</strong>
-    <span id="idx-phase">—</span> •
-    <span id="idx-counts">0 / 0</span>
-    <div class="progress mt-2" style="height: 8px;">
-      <div id="idx-progress" class="progress-bar bg-info" role="progressbar" style="width:0%">0%</div>
+  <main class="container my-4">
+    <!-- Indexing progress -->
+    <div id="indexProgress" class="alert alert-secondary d-none" role="alert">
+      <div class="d-flex justify-content-between">
+        <div>
+          <strong>Indexing your library…</strong>
+          <div class="small text-secondary">
+            <span id="idxPhase">indexing</span>
+            <span id="idxCounts" class="ms-2">(0 / 0)</span>
+          </div>
+          <div class="small text-secondary" id="idxCurrent"></div>
+        </div>
+        <div class="text-end">
+          <span class="badge text-bg-light" id="idxEta">—</span>
+        </div>
+      </div>
+      <div class="progress mt-2">
+        <div id="idxBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%">0%</div>
+      </div>
     </div>
-  </div>
 
-  <!-- Stats cards -->
-  <div class="row g-3 mb-4">
-    <div class="col-md-3">
-      <div class="card stat-card text-center">
-        <div class="card-body">
-          <div class="fw-bold text-muted">Total comics</div>
-          <div id="stat-total" class="display-6">—</div>
+    <!-- Thumbnails pre-cache progress -->
+    <div id="thumbsProgress" class="alert alert-primary d-none" role="alert">
+      <div class="d-flex justify-content-between">
+        <div>
+          <strong>Generating thumbnails…</strong>
+          <div class="small text-secondary">
+            <span id="thCounts">(0 / 0)</span>
+          </div>
+        </div>
+        <div class="text-end">
+          <span class="badge text-bg-light" id="thEta">—</span>
+        </div>
+      </div>
+      <div class="progress mt-2">
+        <div id="thBar" class="progress-bar progress-bar-striped progress-bar-animated bg-primary" style="width:0%">0%</div>
+      </div>
+    </div>
+
+    <!-- KPIs -->
+    <div class="row g-3 kpis">
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="metric"><i class="bi bi-collection"></i>
+            <div><div class="value" id="totalComics">0</div><div class="label">Total comics</div></div>
+          </div>
+        </div></div>
+      </div>
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="metric"><i class="bi bi-layers"></i>
+            <div><div class="value" id="uniqueSeries">0</div><div class="label">Unique series</div></div>
+          </div>
+        </div></div>
+      </div>
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="metric"><i class="bi bi-building"></i>
+            <div><div class="value" id="uniquePublishers">0</div><div class="label">Publishers</div></div>
+          </div>
+        </div></div>
+      </div>
+      <div class="col-12 col-md-6 col-xl-3">
+        <div class="card h-100"><div class="card-body">
+          <div class="metric"><i class="bi bi-filetype-zip"></i>
+            <div><div class="value" id="formats">—</div><div class="label">Formats</div></div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+
+    <!-- Charts -->
+    <div class="row g-3 mt-1">
+      <div class="col-12 col-lg-6">
+        <div class="card h-100 chart-card">
+          <div class="card-header fw-semibold">Publishers distribution</div>
+          <div class="card-body"><canvas id="publishersChart"></canvas></div>
+          <div class="card-footer small footer-note">Top publishers (others grouped).</div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-6">
+        <div class="card h-100 chart-card">
+          <div class="card-header fw-semibold">Publication timeline</div>
+          <div class="card-body"><canvas id="timelineChart"></canvas></div>
+          <div class="card-footer small footer-note">Issues per year.</div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-6" id="formatsCardCol">
+        <div class="card h-100 chart-card">
+          <div class="card-header fw-semibold">Formats breakdown</div>
+          <div class="card-body"><canvas id="formatsChart"></canvas></div>
+          <div class="card-footer small footer-note">Counts by file extension (e.g., CBZ).</div>
+        </div>
+      </div>
+      <div class="col-12 col-lg-6">
+        <div class="card h-100 chart-card">
+          <div class="card-header fw-semibold">Top writers</div>
+          <div class="card-body"><canvas id="writersChart"></canvas></div>
+          <div class="card-footer small footer-note">Top 15 writers across your library.</div>
         </div>
       </div>
     </div>
-    <div class="col-md-3">
-      <div class="card stat-card text-center">
-        <div class="card-body">
-          <div class="fw-bold text-muted">Unique series</div>
-          <div id="stat-series" class="display-6">—</div>
-        </div>
-      </div>
+  </main>
+
+  <footer class="container my-4 small footer-note">
+    <div class="d-flex justify-content-between">
+      <span>ComicOPDS Dashboard</span>
+      <span><a href="/opds" class="link-secondary text-decoration-none"><i class="bi bi-rss me-1"></i>OPDS feed</a></span>
     </div>
-    <div class="col-md-3">
-      <div class="card stat-card text-center">
-        <div class="card-body">
-          <div class="fw-bold text-muted">Publishers</div>
-          <div id="stat-publishers" class="display-6">—</div>
-        </div>
-      </div>
-    </div>
-    <div class="col-md-3">
-      <div class="card stat-card text-center">
-        <div class="card-body">
-          <div class="fw-bold text-muted">Last updated</div>
-          <div id="stat-updated" class="h6 font-mono">—</div>
-        </div>
-      </div>
-    </div>
-  </div>
+  </footer>
 
-  <!-- Charts -->
-  <div class="row g-3 mb-3">
-    <div class="col-md-6">
-      <div class="card">
-        <div class="card-header fw-semibold">Publishers distribution</div>
-        <div class="card-body chart-wrap">
-          <canvas id="publishersChart"></canvas>
-          <div id="pub-empty" class="empty-overlay">No data</div>
-        </div>
-      </div>
-    </div>
-    <div class="col-md-6">
-      <div class="card">
-        <div class="card-header fw-semibold">Publication timeline</div>
-        <div class="card-body chart-wrap">
-          <canvas id="timelineChart"></canvas>
-          <div id="time-empty" class="empty-overlay">No data</div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const baseOptions = {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:false} },
+      interaction:{ mode:'nearest', axis:'x', intersect:false },
+      scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:true, ticks:{ precision:0 } } }
+    };
+    const charts = {};
+    function upsertChart(id, cfg){ const e=Chart.getChart(id)||charts[id]; if(e) e.destroy(); const el=document.getElementById(id); if(!el) return null; return charts[id]=new Chart(el, cfg); }
+    async function jget(u){ const r=await fetch(u,{credentials:'include'}); if(!r.ok) throw Error(r.status); return r.json(); }
 
-  <div class="row g-3 mb-3">
-    <div class="col-md-12">
-      <div class="card">
-        <div class="card-header fw-semibold">Top writers</div>
-        <div class="card-body chart-wrap" style="min-height:380px;">
-          <canvas id="writersChart"></canvas>
-          <div id="writers-empty" class="empty-overlay">No data</div>
-        </div>
-      </div>
-    </div>
-  </div>
+    function mapPublishers(d){ const a=Array.isArray(d.top_publishers)?d.top_publishers:[]; return {labels:a.map(x=>x.publisher??'(Unknown)'),values:a.map(x=>x.count??x.c??0)}; }
+    function mapTimeline(d){ const l=(d.timeline_by_year||[]).filter(x=>x.year!=null).sort((a,b)=>(+a.year)-(+b.year)); return {labels:l.map(x=>String(x.year)),values:l.map(x=>x.count??0)}; }
+    function mapWriters(d){ const a=Array.isArray(d.top_writers)?d.top_writers:[]; return {labels:a.map(x=>x.writer??'(Unknown)'),values:a.map(x=>x.count??0)}; }
+    function mapFormats(d){ const fmt=d.formats&&typeof d.formats==='object'?d.formats:null; if(fmt&&Object.keys(fmt).length){return{labelText:Object.entries(fmt).map(([k,v])=>`${k.toUpperCase()}: ${v}`).join('  '),labels:Object.keys(fmt),values:Object.values(fmt)}} const tot=d.total_comics??0; return{labelText:`CBZ: ${tot}`,labels:tot?['CBZ']:[],values:tot?[tot]:[]}; }
 
-  <p class="text-muted small">Tip: Use <em>Reindex</em> after adding comics. Thumbnails are generated lazily unless pre-cache is enabled.</p>
-</div>
+    async function load(){
+      const d = await jget("/stats.json");
+      document.getElementById("lastUpdated").textContent = d.last_updated? new Date(d.last_updated*1000).toLocaleString() : "—";
+      document.getElementById("covers").textContent = d.total_covers ?? "0";
+      document.getElementById("totalComics").textContent = d.total_comics ?? "0";
+      document.getElementById("uniqueSeries").textContent = d.unique_series ?? "0";
+      document.getElementById("uniquePublishers").textContent = d.publishers ?? "0";
 
-<script>
-(function(){
-  let charts = { publishers:null, timeline:null, writers:null };
+      const fmt = mapFormats(d);
+      document.getElementById("formats").textContent = fmt.labelText || "—";
+      const hasFormats = (fmt.values.reduce((a,b)=>a+b,0) > 0);
+      document.getElementById("formatsCardCol").style.display = hasFormats ? "" : "none";
 
-  function fmtInt(n){ return (n||n===0)? n.toLocaleString() : "—"; }
-  function fmtDateEpoch(sec){
-    if (!sec) return "—";
-    try { return new Date(sec*1000).toISOString().slice(0,19).replace('T',' '); }
-    catch { return "—"; }
-  }
+      const pubs = mapPublishers(d);
+      const zipped = pubs.labels.map((l,i)=>({l, v: pubs.values[i]||0})).sort((a,b)=>b.v-a.v);
+      upsertChart("publishersChart",{ type:"doughnut", data:{labels:zipped.map(x=>x.l), datasets:[{data:zipped.map(x=>x.v)}]}, options:{...baseOptions, cutout:"60%", scales:{}} });
 
-  async function jget(u){ const r=await fetch(u); if(!r.ok) throw Error(r.status); return r.json(); }
+      const tl = mapTimeline(d);
+      upsertChart("timelineChart",{ type:"line", data:{labels:tl.labels, datasets:[{ label:"Issues per year", data:tl.values, fill:true, tension:0.25, pointRadius:2 }]}, options:{...baseOptions} });
 
-  async function loadStats(){
-    const d = await jget("/stats.json");
-    document.getElementById("stat-total").textContent = fmtInt(d.total_comics);
-    document.getElementById("stat-series").textContent = fmtInt(d.unique_series);
-    document.getElementById("stat-publishers").textContent = fmtInt(d.publishers);
-    document.getElementById("stat-updated").textContent = fmtDateEpoch(d.last_updated);
+      if (hasFormats){
+        upsertChart("formatsChart",{ type:"bar", data:{labels:fmt.labels, datasets:[{ label:"Files", data:fmt.values }]}, options:{...baseOptions} });
+      } else {
+        const ex = Chart.getChart("formatsChart"); if (ex) ex.destroy();
+      }
 
-    // Publishers
-    const pubs = d.top_publishers||[];
-    toggleEmpty("pub-empty", pubs.length===0);
-    if(charts.publishers) charts.publishers.destroy();
-    if(pubs.length){
-      charts.publishers = new Chart(document.getElementById("publishersChart"), {
-        type:"doughnut",
-        data:{ labels: pubs.map(x=>x.publisher), datasets:[{ data: pubs.map(x=>x.count) }]},
-        options:{ responsive:true, plugins:{ legend:{position:"bottom"}}, maintainAspectRatio:false }
-      });
+      const tw = mapWriters(d);
+      upsertChart("writersChart",{ type:"bar", data:{labels:tw.labels, datasets:[{ label:"Issues", data:tw.values }]}, options:{...baseOptions, indexAxis:'y'} });
     }
 
-    // Timeline
-    const tl = (d.timeline_by_year||[]).filter(x=>x.year).sort((a,b)=>a.year-b.year);
-    toggleEmpty("time-empty", tl.length===0);
-    if(charts.timeline) charts.timeline.destroy();
-    if(tl.length){
-      charts.timeline = new Chart(document.getElementById("timelineChart"), {
-        type:"line",
-        data:{ labels: tl.map(x=>x.year), datasets:[{ data: tl.map(x=>x.count), tension:0.2 }]},
-        options:{ responsive:true, plugins:{legend:{display:false}}, maintainAspectRatio:false }
-      });
+    // ----- Index progress -----
+    let lastIdx = null;
+    function showIndexUI(s){
+      const box = document.getElementById("indexProgress");
+      if (s.running || (!s.usable && s.phase!=='idle')){
+        box.classList.remove("d-none");
+        const done=s.done||0, total=Math.max(s.total||0,1), pct=Math.min(100, Math.floor(done*100/total));
+        document.getElementById("idxPhase").textContent = s.phase||"indexing";
+        document.getElementById("idxCounts").textContent = `(${done} / ${s.total||0})`;
+        document.getElementById("idxCurrent").textContent = s.current || "";
+        const bar = document.getElementById("idxBar");
+        bar.style.width = pct+"%"; bar.textContent = pct+"%";
+        let eta="—";
+        if (s.started_at && done>5 && (s.total>done)){
+          const elapsed=(Date.now()/1000 - s.started_at), per=elapsed/done, secs=Math.round(per*(s.total-done));
+          eta=`~${Math.floor(secs/60)}m ${secs%60}s left`;
+        }
+        document.getElementById("idxEta").textContent = eta;
+      } else {
+        box.classList.add("d-none");
+      }
+    }
+    function shouldReloadCharts(newS, oldS){
+      if (!newS) return false;
+      if (!oldS) return (!newS.running && newS.usable);
+      const finished = oldS.running && !newS.running;
+      const endedChanged = newS.ended_at && newS.ended_at !== oldS.ended_at;
+      const becameUsable = !oldS.usable && newS.usable;
+      return finished || endedChanged || becameUsable;
+    }
+    async function pollIndex(){
+      let delay=5000;
+      try{
+        const s = await jget("/index/status");
+        showIndexUI(s);
+        if (shouldReloadCharts(s, lastIdx)) await load();
+        delay = s.running ? 800 : 5000;
+        lastIdx = s;
+      }catch{ delay=5000; }
+      setTimeout(pollIndex, delay);
     }
 
-    // Writers
-    const wr = d.top_writers||[];
-    toggleEmpty("writers-empty", wr.length===0);
-    if(charts.writers) charts.writers.destroy();
-    if(wr.length){
-      charts.writers = new Chart(document.getElementById("writersChart"), {
-        type:"bar",
-        data:{ labels: wr.map(x=>x.writer), datasets:[{ data: wr.map(x=>x.count)}]},
-        options:{ indexAxis:"y", responsive:true, plugins:{legend:{display:false}}, maintainAspectRatio:false }
-      });
+    // ----- Thumbnails pre-cache progress -----
+    async function pollThumbs(){
+      let delay=5000;
+      try{
+        const t = await jget("/thumbs/status");
+        // Progress UI
+        const box = document.getElementById("thumbsProgress");
+        if (t && t.running){
+          box.classList.remove("d-none");
+          const done=t.done||0, total=Math.max(t.total||0,1), pct=Math.min(100, Math.floor(done*100/total));
+          document.getElementById("thCounts").textContent = `(${done} / ${t.total||0})`;
+          const bar=document.getElementById("thBar");
+          bar.style.width = pct+"%"; bar.textContent = pct+"%";
+          let eta="—";
+          if (t.started_at && done>5 && (t.total>done)){
+            const elapsed=(Date.now()/1000 - t.started_at), per=elapsed/done, secs=Math.round(per*(t.total-done));
+            eta=`~${Math.floor(secs/60)}m ${secs%60}s left`;
+          }
+          document.getElementById("thEta").textContent = eta;
+          delay = 800;
+        } else {
+          box.classList.add("d-none");
+          delay = 5000;
+        }
+      }catch{ delay=5000; }
+      setTimeout(pollThumbs, delay);
     }
-  }
 
-  function toggleEmpty(id, show){ document.getElementById(id).style.display = show? "flex":"none"; }
+    // ----- Errors counter -----
+    async function pollErrors(){
+      let delay=8000;
+      try{
+        const e = await jget("/thumbs/errors/count");
+        const n = e?.lines || 0;
+        const el = document.getElementById("errCount");
+        el.textContent = n;
+        el.parentElement.classList.toggle("link-danger", n>0);
+        delay = n>0 ? 5000 : 15000;
+      }catch{ delay=15000; }
+      setTimeout(pollErrors, delay);
+    }
 
-  async function fetchIndexStatus(){
-    try{
-      const s=await jget("/index/status");
-      const box=document.getElementById("indexBox");
-      if(!s||!s.running){ box.style.display="none"; return; }
-      box.style.display="";
-      document.getElementById("idx-phase").textContent=s.phase||"running";
-      document.getElementById("idx-counts").textContent=`${s.done||0} / ${s.total||0}`;
-      const pct=(s.total>0)? Math.floor((s.done/s.total)*100):0;
-      const bar=document.getElementById("idx-progress");
-      bar.style.width=pct+"%"; bar.textContent=pct+"%";
-    }catch{}
-  }
+    async function triggerThumbs(){
+      const btn = document.getElementById("thumbsBtn");
+      const html = btn.innerHTML;
+      try{
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Starting…';
+        await fetch("/admin/thumbs/precache", { method:"POST", credentials:"include" });
+      }catch(e){
+        alert("Failed to start thumbnails pre-cache: " + (e?.message || e));
+      }finally{
+        setTimeout(()=>{ btn.disabled=false; btn.innerHTML=html; }, 600);
+      }
+    }
 
-  async function triggerReindex(){
-    try{
-      await fetch("/admin/reindex",{method:"POST"});
-      document.getElementById("indexBox").style.display="";
-      let tries=0; const t=setInterval(async()=>{
-        tries++; await fetchIndexStatus();
-        if(tries>300) clearInterval(t);
-      },1000);
-    }catch(e){ alert("Failed to start reindex: "+e); }
-  }
+    document.getElementById("reindexBtn").addEventListener("click", async ()=>{
+      await fetch("/admin/reindex",{method:"POST", credentials:"include"}).catch(()=>{});
+    });
+    document.getElementById("thumbsBtn").addEventListener("click", triggerThumbs);
 
-  document.getElementById("btn-refresh").onclick=()=>{ loadStats(); fetchIndexStatus(); };
-  document.getElementById("btn-reindex").onclick=()=>{ triggerReindex(); };
+    // Initial load & polls
+    load();
+    pollIndex();
+    pollThumbs();
+    pollErrors();
 
-  loadStats(); fetchIndexStatus();
-})();
-</script>
+    window.addEventListener("beforeunload", ()=>{ Object.values(Chart.instances||{}).forEach(c=>{ try{c.destroy()}catch{}}); });
+  </script>
 </body>
 </html>

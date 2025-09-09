@@ -1,20 +1,19 @@
 import os
-from fastapi import Depends, HTTPException, status
+from fastapi import HTTPException, Request
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from secrets import compare_digest
-
-USER = os.environ.get("OPDS_BASIC_USER")
-PASS = os.environ.get("OPDS_BASIC_PASS")
 
 security = HTTPBasic()
 
-def require_basic(creds: HTTPBasicCredentials = Depends(security)):
-    if not USER or not PASS:
-        return  # auth disabled
-    if compare_digest(creds.username, USER) and compare_digest(creds.password, PASS):
+DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").strip().lower() in ("1","true","yes")
+USER = os.getenv("OPDS_BASIC_USER", "").strip()
+PASS = os.getenv("OPDS_BASIC_PASS", "").strip()
+
+def require_basic(request: Request, credentials: HTTPBasicCredentials = None):
+    # If disabled, or no credentials configured at all, allow through
+    if DISABLE_AUTH or not USER or not PASS:
         return
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Unauthorized",
-        headers={"WWW-Authenticate": "Basic"},
-    )
+    if credentials is None:
+        credentials = security(request)
+    if not (credentials.username == USER and credentials.password == PASS):
+        raise HTTPException(status_code=401, detail="Not authenticated",
+                            headers={"WWW-Authenticate": "Basic"})

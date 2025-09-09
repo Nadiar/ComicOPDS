@@ -19,3 +19,6 @@ if URL_PREFIX == "/":
     URL_PREFIX = ""
 
 ENABLE_WATCH = _env_bool("ENABLE_WATCH", True)
+PRECACHE_THUMBS = os.getenv("PRECACHE_THUMBS", "false").strip().lower() not in ("0","false","no","off")
+THUMB_WORKERS = max(1, int(os.getenv("THUMB_WORKERS", "2")))
+PRECACHE_ON_START = os.getenv("PRECACHE_ON_START", "false").strip().lower() in ("1","true","yes")

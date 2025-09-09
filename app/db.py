@@ -490,7 +490,7 @@ def smartlist_query(conn: sqlite3.Connection, groups: List[Dict[str, Any]], sort
              FROM items i2
              LEFT JOIN meta m2 ON m2.rel = i2.rel
             WHERE i2.is_dir=0
-              AND m2.series = m.series
+              AND m2.series = m.series AND m2.volume = m.volume
               AND (
                 CAST(COALESCE(NULLIF(m2.year,''),'0') AS INTEGER) > CAST(COALESCE(NULLIF(m.year,''),'0') AS INTEGER) OR
                 (

@@ -21,7 +21,7 @@ import sys
 import logging
 from math import ceil
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
 from .thumbs import have_thumb, generate_thumb
@@ -94,7 +94,6 @@ _INDEX_STATUS = {
     "ended_at": 0.0,
 }
 _INDEX_LOCK = threading.Lock()
-AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() not in ("0","false","no","off")
 
 # -------------------- Small helpers --------------------
 def rget(row, key: str, default=None):

@@ -5,7 +5,7 @@ COPY requirements.txt .
 
 # install system libs for Pillow (JPEG, PNG, WebP)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libjpeg62-turbo zlib1g libpng16-16 libwebp7 \
+      libjpeg62-turbo zlib1g libpng16-16 libwebp7 wget \
   && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -r requirements.txt

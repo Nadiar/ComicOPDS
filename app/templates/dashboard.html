@@ -297,6 +297,26 @@
       setTimeout(pollThumbs, delay);
     }
 
+    function showIndexPending() {
+      const box = document.getElementById("indexProgress");
+      box.classList.remove("d-none");
+      document.getElementById("idxPhase").textContent = "starting…";
+      document.getElementById("idxCounts").textContent = "(0 / ?)";
+      document.getElementById("idxCurrent").textContent = "";
+      const bar = document.getElementById("idxBar");
+      bar.style.width = "100%";
+      bar.textContent = "Starting…";
+    }
+
+    function showThumbsPending() {
+      const box = document.getElementById("thumbsProgress");
+      box.classList.remove("d-none");
+      document.getElementById("thCounts").textContent = "(0 / ?)";
+      const bar = document.getElementById("thBar");
+      bar.style.width = "100%";
+      bar.textContent = "Starting…";
+    }
+
     // ----- Errors counter -----
     async function pollErrors(){
       let delay=8000;
@@ -311,22 +331,44 @@
       setTimeout(pollErrors, delay);
     }
 
-    async function triggerThumbs(){
+    async function triggerThumbs() {
       const btn = document.getElementById("thumbsBtn");
       const html = btn.innerHTML;
-      try{
+      try {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Starting…';
-        await fetch("/admin/thumbs/precache", { method:"POST", credentials:"include" });
-      }catch(e){
+        // Show progress bar instantly
+        showThumbsPending();
+        // Fire request
+        await fetch("/admin/thumbs/precache", { method: "POST", credentials: "include" });
+        // Nudge the thumbs poll immediately
+        setTimeout(() => { /* your existing pollThumbs() */ }, 200);
+      } catch (e) {
         alert("Failed to start thumbnails pre-cache: " + (e?.message || e));
-      }finally{
-        setTimeout(()=>{ btn.disabled=false; btn.innerHTML=html; }, 600);
+      } finally {
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = html; }, 600);
       }
     }
+    document.getElementById("thumbsBtn").addEventListener("click", triggerThumbs);
 
-    document.getElementById("reindexBtn").addEventListener("click", async ()=>{
-      await fetch("/admin/reindex",{method:"POST", credentials:"include"}).catch(()=>{});
+
+    document.getElementById("reindexBtn").addEventListener("click", async () => {
+      const btn = document.getElementById("reindexBtn");
+      const original = btn.innerHTML;
+      try {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Reindexing…';
+        // Show progress bar instantly
+        showIndexPending();
+        // Fire request
+        await fetch("/admin/reindex", { method: "POST", credentials: "include" });
+        // Kick a quick poll right away so it fills with real numbers
+        setTimeout(() => { /* your existing pollIndex() */ }, 200);
+      } catch (e) {
+        alert("Reindex failed: " + (e?.message || e));
+      } finally {
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = original; }, 600);
+      }
     });
     document.getElementById("thumbsBtn").addEventListener("click", triggerThumbs);
 

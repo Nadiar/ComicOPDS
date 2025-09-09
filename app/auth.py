@@ -1,26 +1,43 @@
-from fastapi import Depends, HTTPException, status
+# app/auth.py
+from fastapi import Security, HTTPException, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import secrets
-import os
+import os, secrets, logging
 
-security = HTTPBasic()
+log = logging.getLogger("comicopds.auth")
 
-DISABLE_AUTH = os.getenv("DISABLE_AUTH", "false").strip().lower() in ("1","true","yes")
-USER = os.getenv("OPDS_BASIC_USER", "").strip()
-PASS = os.getenv("OPDS_BASIC_PASS", "").strip()
+def _truthy(v: str | None) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
-async def require_basic(credentials: HTTPBasicCredentials = Depends(security)):
+DISABLE_AUTH = _truthy(os.getenv("DISABLE_AUTH"))
+USER = os.getenv("OPDS_BASIC_USER", "admin")
+PASS = os.getenv("OPDS_BASIC_PASS", "change-me")
+
+# IMPORTANT: auto_error=False so missing creds don't trigger 401 automatically
+security = HTTPBasic(auto_error=False)
+
+def require_basic(credentials: HTTPBasicCredentials | None = Security(security)):
+    """
+    Use as: Depends(require_basic)
+    - If DISABLE_AUTH is true -> allow all (no browser prompt).
+    - Otherwise verify Basic credentials.
+    """
     if DISABLE_AUTH:
-        return True
+        return  # auth disabled entirely
 
-    # Use secrets.compare_digest to avoid timing attacks
-    correct_user = secrets.compare_digest(credentials.username, USER or "")
-    correct_pass = secrets.compare_digest(credentials.password, PASS or "")
+    if credentials is None:
+        # No header provided -> prompt
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": 'Basic realm="ComicOPDS"'},
+        )
 
-    if not (correct_user and correct_pass):
+    ok_user = secrets.compare_digest(credentials.username or "", USER)
+    ok_pass = secrets.compare_digest(credentials.password or "", PASS)
+    if not (ok_user and ok_pass):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid credentials",
-            headers={"WWW-Authenticate": "Basic"},
+            headers={"WWW-Authenticate": 'Basic realm="ComicOPDS"'},
         )
-    return True
+    # authenticated -> nothing to return

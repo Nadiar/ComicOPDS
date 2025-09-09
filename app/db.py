@@ -66,7 +66,8 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
       characters     TEXT,
       teams          TEXT,
       locations      TEXT,
-      comicvineissue TEXT
+      comicvineissue TEXT,
+      format         TEXT
     )
     """)
 
@@ -79,6 +80,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_year      ON meta(year)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_writer    ON meta(writer)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_publisher ON meta(publisher)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_format    ON meta(format)") 
 
     # Try FTS5 — if it fails, we fall back to LIKE search
     try:
@@ -137,7 +139,7 @@ def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> Non
     fields = (
         "title","series","number","volume","year","month","day",
         "writer","publisher","summary","genre","tags","characters",
-        "teams","locations","comicvineissue"
+        "teams","locations","comicvineissue","format"
     )
     vals = [meta.get(k) for k in fields]
 
@@ -176,6 +178,7 @@ def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> Non
         add(meta.get("year"))
         add(meta.get("number"))
         add(meta.get("volume"))
+        add(meta.get("format"))
 
         conn.execute("DELETE FROM fts WHERE rel=?", (rel,))
         if parts:
@@ -330,6 +333,7 @@ FIELD_MAP: Dict[str, str] = {
     "locations": "m.locations",
     "filename": "i.name",
     "name": "i.name",
+    "format": "m.format",
 }
 
 # Treat these fields as numeric (cast when comparing/sorting)
@@ -469,7 +473,8 @@ def _order_by_for_sort(sort: str) -> str:
 
 _TEXT_FIELDS_FOR_FTS = {
     "title","series","publisher","writer","summary","genre",
-    "tags","characters","teams","locations","name","filename"
+    "tags","characters","teams","locations","name","filename",
+    "format"
 }
 
 def _extract_fts_terms_from_groups(groups: List[Dict[str, Any]]) -> List[str]:
@@ -616,6 +621,47 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
         "SELECT MAX(mtime) FROM items"
     ).fetchone()[0]
 
+    # Formats breakdown (top 12 + "Other")
+    rows = conn.execute("""
+       SELECT LOWER(TRIM(IFNULL(m.format,''))) AS fmt, COUNT(*) AS c
+         FROM items i
+         LEFT JOIN meta m ON m.rel=i.rel
+        WHERE i.is_dir=0
+        GROUP BY fmt
+    """).fetchall()
+
+    # normalize common aliases
+    alias = {
+        "trade paperback": "tpb",
+        "tpb": "tpb",
+        "hardcover": "hc",
+        "hc": "hc",
+        "one-shot": "one-shot",
+        "oneshot": "one-shot",
+        "limited series": "limited series",
+        "ongoing series": "ongoing series",
+        "graphic novel": "graphic novel",
+        "web": "web",
+        "digital": "digital",
+    }
+    counts = {}
+    for r in rows:
+        key = (r["fmt"] or "").strip()
+        if not key:
+            key = "(unknown)"
+        key = alias.get(key, key)
+        counts[key] = counts.get(key, 0) + int(r["c"])
+
+    # top 12 + other
+    sorted_items = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
+    top = sorted_items[:12]
+    other_count = sum(v for _, v in sorted_items[12:])
+    formats = [{"format": k, "count": v} for k, v in top]
+    if other_count:
+        formats.append({"format": "other", "count": other_count})
+
+    out["formats_breakdown"] = formats
+
     # Publishers breakdown (top N)
     top_pubs = [
         {"publisher": row[0], "count": row[1]}
@@ -668,7 +714,7 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
         ({"writer": name.title(), "count": c} for name, c in counts.items()),
         key=lambda d: d["count"],
         reverse=True,
-    )[:20]
+    )[:10]
 
     out["top_writers"] = top_writers
 

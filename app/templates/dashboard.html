@@ -109,8 +109,8 @@
       </div>
       <div class="col-12 col-md-6 col-xl-3">
         <div class="card h-100"><div class="card-body">
-          <div class="metric"><i class="bi bi-filetype-zip"></i>
-            <div><div class="value" id="formats">—</div><div class="label">Formats</div></div>
+          <div class="metric"><i class="bi bi-tags"></i>
+            <div><div class="value" id="formats">—</div><div class="label">Formats (kinds)</div></div>
           </div>
         </div></div>
       </div>
@@ -136,7 +136,7 @@
         <div class="card h-100 chart-card">
           <div class="card-header fw-semibold">Formats breakdown</div>
           <div class="card-body"><canvas id="formatsChart"></canvas></div>
-          <div class="card-footer small footer-note">Counts by file extension (e.g., CBZ).</div>
+          <div class="card-footer small footer-note">Breakdown by <code>&lt;Format&gt;</code> in ComicInfo.xml (e.g., TPB, HC, Limited series).</div>
         </div>
       </div>
       <div class="col-12 col-lg-6">
@@ -160,7 +160,7 @@
   <script>
     const baseOptions = {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:false} },
+      plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:true} },
       interaction:{ mode:'nearest', axis:'x', intersect:false },
       scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:true, ticks:{ precision:0 } } }
     };
@@ -171,7 +171,14 @@
     function mapPublishers(d){ const a=Array.isArray(d.top_publishers)?d.top_publishers:[]; return {labels:a.map(x=>x.publisher??'(Unknown)'),values:a.map(x=>x.count??x.c??0)}; }
     function mapTimeline(d){ const l=(d.timeline_by_year||[]).filter(x=>x.year!=null).sort((a,b)=>(+a.year)-(+b.year)); return {labels:l.map(x=>String(x.year)),values:l.map(x=>x.count??0)}; }
     function mapWriters(d){ const a=Array.isArray(d.top_writers)?d.top_writers:[]; return {labels:a.map(x=>x.writer??'(Unknown)'),values:a.map(x=>x.count??0)}; }
-    function mapFormats(d){ const fmt=d.formats&&typeof d.formats==='object'?d.formats:null; if(fmt&&Object.keys(fmt).length){return{labelText:Object.entries(fmt).map(([k,v])=>`${k.toUpperCase()}: ${v}`).join('  '),labels:Object.keys(fmt),values:Object.values(fmt)}} const tot=d.total_comics??0; return{labelText:`CBZ: ${tot}`,labels:tot?['CBZ']:[],values:tot?[tot]:[]}; }
+
+    // NEW: Formats from stats.formats_breakdown (array of {format, count})
+    function mapFormats(d){
+      const arr = Array.isArray(d.formats_breakdown) ? d.formats_breakdown : [];
+      const labels = arr.map(x => x.format || '(unknown)');
+      const values = arr.map(x => x.count || 0);
+      return { labels, values, kinds: arr.length };
+    }
 
     async function load(){
       const d = await jget("/stats.json");
@@ -181,8 +188,9 @@
       document.getElementById("uniqueSeries").textContent = d.unique_series ?? "0";
       document.getElementById("uniquePublishers").textContent = d.publishers ?? "0";
 
+      // Formats KPI + chart
       const fmt = mapFormats(d);
-      document.getElementById("formats").textContent = fmt.labelText || "—";
+      document.getElementById("formats").textContent = String(fmt.kinds || 0);
       const hasFormats = (fmt.values.reduce((a,b)=>a+b,0) > 0);
       document.getElementById("formatsCardCol").style.display = hasFormats ? "" : "none";
 
@@ -194,7 +202,11 @@
       upsertChart("timelineChart",{ type:"line", data:{labels:tl.labels, datasets:[{ label:"Issues per year", data:tl.values, fill:true, tension:0.25, pointRadius:2 }]}, options:{...baseOptions} });
 
       if (hasFormats){
-        upsertChart("formatsChart",{ type:"bar", data:{labels:fmt.labels, datasets:[{ label:"Files", data:fmt.values }]}, options:{...baseOptions} });
+        upsertChart("formatsChart",{
+          type:"doughnut",
+          data:{ labels: fmt.labels, datasets:[{ data: fmt.values }]},
+          options:{ ...baseOptions, cutout:"60%", scales:{} }
+        });
       } else {
         const ex = Chart.getChart("formatsChart"); if (ex) ex.destroy();
       }
@@ -245,7 +257,7 @@
       setTimeout(pollIndex, delay);
     }
 
-
+    // ----- Errors counter + download -----
     async function downloadErrors() {
       try {
         const resp = await fetch("/thumbs/errors/log", { credentials: "include" });
@@ -263,7 +275,6 @@
         alert("Download failed: " + (e?.message || e));
       }
     }
-
     document.getElementById("errLink").addEventListener("click", (ev) => {
       ev.preventDefault();
       downloadErrors();
@@ -274,7 +285,6 @@
       let delay=5000;
       try{
         const t = await jget("/thumbs/status");
-        // Progress UI
         const box = document.getElementById("thumbsProgress");
         if (t && t.running){
           box.classList.remove("d-none");
@@ -317,32 +327,15 @@
       bar.textContent = "Starting…";
     }
 
-    // ----- Errors counter -----
-    async function pollErrors(){
-      let delay=8000;
-      try{
-        const e = await jget("/thumbs/errors/count");
-        const n = e?.lines || 0;
-        const el = document.getElementById("errCount");
-        el.textContent = n;
-        el.parentElement.classList.toggle("link-danger", n>0);
-        delay = n>0 ? 5000 : 15000;
-      }catch{ delay=15000; }
-      setTimeout(pollErrors, delay);
-    }
-
     async function triggerThumbs() {
       const btn = document.getElementById("thumbsBtn");
       const html = btn.innerHTML;
       try {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Starting…';
-        // Show progress bar instantly
-        showThumbsPending();
-        // Fire request
+        showThumbsPending();                    // show immediately
         await fetch("/admin/thumbs/precache", { method: "POST", credentials: "include" });
-        // Nudge the thumbs poll immediately
-        setTimeout(() => { /* your existing pollThumbs() */ }, 200);
+        setTimeout(pollThumbs, 200);            // kick the poll
       } catch (e) {
         alert("Failed to start thumbnails pre-cache: " + (e?.message || e));
       } finally {
@@ -351,32 +344,37 @@
     }
     document.getElementById("thumbsBtn").addEventListener("click", triggerThumbs);
 
-
     document.getElementById("reindexBtn").addEventListener("click", async () => {
       const btn = document.getElementById("reindexBtn");
       const original = btn.innerHTML;
       try {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Reindexing…';
-        // Show progress bar instantly
-        showIndexPending();
-        // Fire request
+        showIndexPending();                     // show immediately
         await fetch("/admin/reindex", { method: "POST", credentials: "include" });
-        // Kick a quick poll right away so it fills with real numbers
-        setTimeout(() => { /* your existing pollIndex() */ }, 200);
+        setTimeout(pollIndex, 200);             // kick the poll
       } catch (e) {
         alert("Reindex failed: " + (e?.message || e));
       } finally {
         setTimeout(() => { btn.disabled = false; btn.innerHTML = original; }, 600);
       }
     });
-    document.getElementById("thumbsBtn").addEventListener("click", triggerThumbs);
 
     // Initial load & polls
     load();
     pollIndex();
     pollThumbs();
-    pollErrors();
+    // Errors counter
+    (function pollErrors(){
+      let delay=8000;
+      jget("/thumbs/errors/count").then(e => {
+        const n = e?.lines || 0;
+        const el = document.getElementById("errCount");
+        el.textContent = n;
+        el.parentElement.classList.toggle("link-danger", n>0);
+        delay = n>0 ? 5000 : 15000;
+      }).catch(()=>{ delay=15000; }).finally(()=>setTimeout(pollErrors, delay));
+    })();
   </script>
 </body>
 </html>

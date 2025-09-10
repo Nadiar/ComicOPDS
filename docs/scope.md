@@ -49,7 +49,7 @@ These features will not be added to ComicOPDS. If you need them, consider other 
 - **Metadata scraping from ComicVine** - Use ComicRack's excellent scraping capabilities
 - **Automatic metadata enhancement** - ComicOPDS only reads existing metadata, never modifies it
 
-> 💡 **Alternative**: Use [ComicRack](http://comicrack.cyolito.com/) for comprehensive metadata management. See my [ComicRack guide](https://comicrack.baerentsen.space/) for best practices.
+> 💡 **Alternative**: Use [ComicRack](https://github.com/maforget/ComicRackCE) for comprehensive metadata management. See my [ComicRack guide](https://comicrack.baerentsen.space/) for best practices.
 
 ### Reading Interface
 - **Built-in web reader** - ComicOPDS is an OPDS server, not a reading application
@@ -118,7 +118,7 @@ ComicOPDS is designed for a specific use case. If your needs don't match our sco
 - **[Comixed](https://github.com/comixed/comixed)** - Java-based comic library manager
 
 ### For Metadata Management  
-- **[ComicRack](http://comicrack.cyolito.com/)** - The gold standard for comic organization and metadata
+- **[ComicRack](https://github.com/maforget/ComicRackCE)** - The gold standard for comic organization and metadata
 - **[ComicTagger](https://github.com/comictagger/comictagger)** - Command-line metadata tool
 - **[Metron-Tagger](https://github.com/Metron-Project/metron-tagger)** - Command-line metadata tool for [metron.cloud](https://metron.cloud)
 

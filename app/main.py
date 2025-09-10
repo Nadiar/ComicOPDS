@@ -38,6 +38,16 @@ app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
 
+def _truthy(v: str | None) -> bool:
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+PAGE_CACHE_DIR = Path("/data/pages")  # already present in your file
+PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
+PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
+PAGE_CACHE_AUTOCLEAN = _truthy(os.getenv("PAGE_CACHE_AUTOCLEAN", "true")) # run background cleaner
+PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.getenv("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360")) # every 6h
+
+
 def _mask_headers(h: dict) -> dict:
     masked = {}
     for k, v in h.items():
@@ -294,6 +304,14 @@ def startup():
     if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
         t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
         t.start()
+
+    # Start pages auto-clean thread
+    if PAGE_CACHE_AUTOCLEAN:
+        t = threading.Thread(target=_autoclean_loop, daemon=True)
+        t.start()
+        app_logger.info(f"Page cache auto-clean enabled: every {PAGE_CACHE_CLEAN_INTERVAL_MIN} min, "
+                        f"ttl={PAGE_CACHE_TTL_DAYS}d, cap={PAGE_CACHE_MAX_BYTES} bytes")
+
 
     conn = db.connect()
     try:
@@ -724,7 +742,122 @@ def pse_page(path: str = Query(...), page: int = Query(0, ge=0), _=Depends(requi
     cache_dir = _book_cache_dir(path)
     dest = cache_dir / f"{page+1:04d}.jpg"
     out = _ensure_page_jpeg(abs_cbz, inner, dest)
+    # --- heartbeat: mark this book cache as recently used ---
+    try:
+        (cache_dir / ".last").touch()
+    except Exception:
+        pass
     return FileResponse(out, media_type="image/jpeg")
+
+# -------- Page cache cleanup --------
+_LAST_CACHE_CLEAN = {"ts": 0.0, "deleted_dirs": 0, "deleted_bytes": 0, "reason": ""}
+
+def _dir_size(p: Path) -> int:
+    total = 0
+    for root, _, files in os.walk(p):
+        for fn in files:
+            try:
+                total += (Path(root) / fn).stat().st_size
+            except Exception:
+                pass
+    return total
+
+def _book_cache_entries() -> list[tuple[Path, float, int]]:
+    """
+    Returns list of (dir_path, last_mtime, size_bytes) for each book cache dir.
+    last_mtime prefers .last heartbeat; falls back to dir mtime.
+    """
+    entries = []
+    if not PAGE_CACHE_DIR.exists():
+        return entries
+    for d in PAGE_CACHE_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        hb = d / ".last"
+        try:
+            last = hb.stat().st_mtime if hb.exists() else d.stat().st_mtime
+        except Exception:
+            last = 0.0
+        try:
+            sz = _dir_size(d)
+        except Exception:
+            sz = 0
+        entries.append((d, last, sz))
+    return entries
+
+def _remove_dir(p: Path) -> int:
+    """Remove directory tree, return bytes freed (best-effort)."""
+    size = 0
+    try:
+        size = _dir_size(p)
+    except Exception:
+        pass
+    try:
+        for root, dirs, files in os.walk(p, topdown=False):
+            for fn in files:
+                try: (Path(root) / fn).unlink()
+                except Exception: pass
+            for dn in dirs:
+                try: (Path(root) / dn).rmdir()
+                except Exception: pass
+        p.rmdir()
+    except Exception:
+        pass
+    return size
+
+def _clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
+    now = time.time()
+    ttl_secs = max(0, int(ttl_days)) * 86400
+    entries = _book_cache_entries()
+
+    deleted_dirs = 0
+    deleted_bytes = 0
+
+    # 1) TTL eviction
+    if ttl_secs > 0:
+        for d, last, _sz in entries:
+            if (now - last) > ttl_secs:
+                deleted_bytes += _remove_dir(d)
+                deleted_dirs += 1
+        # refresh list after TTL deletes
+        entries = _book_cache_entries()
+
+    # 2) Size cap eviction
+    total_bytes = sum(sz for _d, _last, sz in entries)
+    if max_bytes > 0 and total_bytes > max_bytes:
+        # sort by last mtime ascending (oldest first)
+        entries.sort(key=lambda t: t[1])
+        i = 0
+        while total_bytes > max_bytes and i < len(entries):
+            d, _last, sz = entries[i]
+            total_bytes -= sz
+            deleted_bytes += _remove_dir(d)
+            deleted_dirs += 1
+            i += 1
+
+    _LAST_CACHE_CLEAN.update({"ts": now, "deleted_dirs": deleted_dirs, "deleted_bytes": deleted_bytes, "reason": "manual/auto"})
+    return dict(_LAST_CACHE_CLEAN)
+
+def _page_cache_status() -> dict:
+    entries = _book_cache_entries()
+    return {
+        "dir_count": len(entries),
+        "total_bytes": sum(sz for _d, _last, sz in entries),
+        "last_clean": _LAST_CACHE_CLEAN,
+        "ttl_days": PAGE_CACHE_TTL_DAYS,
+        "max_bytes": PAGE_CACHE_MAX_BYTES,
+    }
+
+def _autoclean_loop():
+    while True:
+        try:
+            _clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
+        except Exception as e:
+            app_logger.error(f"page cache autoclean error: {e}")
+        # sleep
+        interval = max(1, PAGE_CACHE_CLEAN_INTERVAL_MIN) * 60
+        time.sleep(interval)
+
 
 # -------------------- Dashboard & stats --------------------
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -860,10 +993,7 @@ def _smartlists_load():
     return []  # default
 
 def _smartlists_save(lists):
-    # backup old file
-    if SMARTLISTS_PATH.exists():
-        ts = time.strftime("%Y%m%d-%H%M%S")
-        SMARTLISTS_PATH.rename(SMARTLISTS_PATH.with_suffix(f".{ts}.bak"))
+    SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
     with SMARTLISTS_PATH.open("w", encoding="utf-8") as f:
         json.dump(lists, f, ensure_ascii=False, indent=2)
 
@@ -960,3 +1090,12 @@ def thumbs_errors_log(_=Depends(require_basic)):
         filename="thumbs_errors.log",
         headers={"Cache-Control": "no-store"}
     )
+
+@app.get("/pages/cache/status", response_class=JSONResponse)
+def pages_cache_status(_=Depends(require_basic)):
+    return JSONResponse(_page_cache_status())
+
+@app.post("/admin/pages/cleanup", response_class=JSONResponse)
+def admin_pages_cleanup(_=Depends(require_basic)):
+    res = _clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
+    return JSONResponse({"ok": True, **res})

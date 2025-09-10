@@ -22,6 +22,7 @@
     .footer-note { color: var(--bs-secondary-color); }
     .kpis .card { transition: transform .15s ease; }
     .kpis .card:hover { transform: translateY(-2px); }
+    .cache-pill { font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -32,14 +33,19 @@
       <div class="ms-auto d-flex align-items-center gap-2">
         <span class="navbar-text small text-secondary me-2">
           <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
-          <!-- errors badge + download link -->
           • Errors: <a id="errLink" href="#" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
+          <!-- NEW: live page cache status -->
+          • Cache: <span id="cacheStatus" class="badge text-bg-light cache-pill">—</span>
         </span>
         <button id="thumbsBtn" class="btn btn-sm btn-outline-primary">
           <i class="bi bi-images me-1"></i> Pre-cache Thumbnails
         </button>
         <button id="reindexBtn" class="btn btn-sm btn-outline-secondary">
           <i class="bi bi-arrow-repeat me-1"></i> Reindex
+        </button>
+        <!-- NEW: Clean Page Cache -->
+        <button id="cleanCacheBtn" class="btn btn-sm btn-outline-danger">
+          <i class="bi bi-trash3 me-1"></i> Clean Page Cache
         </button>
       </div>
     </div>
@@ -149,6 +155,16 @@
     </div>
   </main>
 
+  <!-- Toast (bottom-right) for one-off messages like cache cleanup result) -->
+  <div class="position-fixed bottom-0 end-0 p-3" style="z-index:1080">
+    <div id="toast" class="toast align-items-center text-bg-dark border-0" role="alert" aria-live="assertive" aria-atomic="true">
+      <div class="d-flex">
+        <div id="toastBody" class="toast-body">Done.</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+      </div>
+    </div>
+  </div>
+
   <footer class="container my-4 small footer-note">
     <div class="d-flex justify-content-between">
       <span>ComicOPDS Dashboard</span>
@@ -160,7 +176,7 @@
   <script>
     const baseOptions = {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:true} },
+      plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:false} },
       interaction:{ mode:'nearest', axis:'x', intersect:false },
       scales:{ x:{ ticks:{ maxRotation:0, autoSkip:true } }, y:{ beginAtZero:true, ticks:{ precision:0 } } }
     };
@@ -172,12 +188,19 @@
     function mapTimeline(d){ const l=(d.timeline_by_year||[]).filter(x=>x.year!=null).sort((a,b)=>(+a.year)-(+b.year)); return {labels:l.map(x=>String(x.year)),values:l.map(x=>x.count??0)}; }
     function mapWriters(d){ const a=Array.isArray(d.top_writers)?d.top_writers:[]; return {labels:a.map(x=>x.writer??'(Unknown)'),values:a.map(x=>x.count??0)}; }
 
-    // NEW: Formats from stats.formats_breakdown (array of {format, count})
+    // Formats from stats.formats_breakdown (array of {format, count})
     function mapFormats(d){
       const arr = Array.isArray(d.formats_breakdown) ? d.formats_breakdown : [];
       const labels = arr.map(x => x.format || '(unknown)');
       const values = arr.map(x => x.count || 0);
       return { labels, values, kinds: arr.length };
+    }
+
+    function fmtBytes(n){
+      if(!Number.isFinite(n)) return "—";
+      const u=['B','KB','MB','GB','TB']; let i=0; let v=Number(n);
+      while(v>=1024 && i<u.length-1){ v/=1024; i++; }
+      return (v>=10? v.toFixed(0): v.toFixed(1))+" "+u[i];
     }
 
     async function load(){
@@ -257,29 +280,6 @@
       setTimeout(pollIndex, delay);
     }
 
-    // ----- Errors counter + download -----
-    async function downloadErrors() {
-      try {
-        const resp = await fetch("/thumbs/errors/log", { credentials: "include" });
-        if (!resp.ok) throw new Error("HTTP " + resp.status);
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "thumbs_errors.log";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } catch (e) {
-        alert("Download failed: " + (e?.message || e));
-      }
-    }
-    document.getElementById("errLink").addEventListener("click", (ev) => {
-      ev.preventDefault();
-      downloadErrors();
-    });
-
     // ----- Thumbnails pre-cache progress -----
     async function pollThumbs(){
       let delay=5000;
@@ -307,6 +307,30 @@
       setTimeout(pollThumbs, delay);
     }
 
+    // ----- Errors counter + download -----
+    async function downloadErrors() {
+      try {
+        const resp = await fetch("/thumbs/errors/log", { credentials: "include" });
+        if (!resp.ok) throw new Error("HTTP " + resp.status);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "thumbs_errors.log";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      } catch (e) {
+        alert("Download failed: " + (e?.message || e));
+      }
+    }
+    document.getElementById("errLink").addEventListener("click", (ev) => {
+      ev.preventDefault();
+      downloadErrors();
+    });
+
+    // ----- Buttons -----
     function showIndexPending() {
       const box = document.getElementById("indexProgress");
       box.classList.remove("d-none");
@@ -317,7 +341,6 @@
       bar.style.width = "100%";
       bar.textContent = "Starting…";
     }
-
     function showThumbsPending() {
       const box = document.getElementById("thumbsProgress");
       box.classList.remove("d-none");
@@ -333,9 +356,9 @@
       try {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Starting…';
-        showThumbsPending();                    // show immediately
+        showThumbsPending();
         await fetch("/admin/thumbs/precache", { method: "POST", credentials: "include" });
-        setTimeout(pollThumbs, 200);            // kick the poll
+        setTimeout(pollThumbs, 200);
       } catch (e) {
         alert("Failed to start thumbnails pre-cache: " + (e?.message || e));
       } finally {
@@ -350,9 +373,9 @@
       try {
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Reindexing…';
-        showIndexPending();                     // show immediately
+        showIndexPending();
         await fetch("/admin/reindex", { method: "POST", credentials: "include" });
-        setTimeout(pollIndex, 200);             // kick the poll
+        setTimeout(pollIndex, 200);
       } catch (e) {
         alert("Reindex failed: " + (e?.message || e));
       } finally {
@@ -360,10 +383,47 @@
       }
     });
 
+    // NEW: Clean page cache
+    async function updateCacheStatus() {
+      try{
+        const s = await jget("/pages/cache/status");
+        const badge = document.getElementById("cacheStatus");
+        badge.textContent = `${s.dir_count ?? 0} dirs • ${fmtBytes(s.total_bytes ?? 0)}`;
+      } catch {
+        document.getElementById("cacheStatus").textContent = "—";
+      }
+    }
+    async function cleanCache() {
+      const btn = document.getElementById("cleanCacheBtn");
+      const original = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Cleaning…';
+      try {
+        const resp = await fetch("/admin/pages/cleanup", { method:"POST", credentials:"include" });
+        const data = await resp.json().catch(()=>({}));
+        // toast
+        const toastEl = document.getElementById('toast');
+        document.getElementById('toastBody').textContent =
+          `Cache cleaned: ${data.deleted_dirs ?? 0} dirs, ${fmtBytes(data.deleted_bytes ?? 0)} freed.`;
+        const t = new bootstrap.Toast(toastEl, { delay: 4000 });
+        t.show();
+      } catch (e) {
+        alert("Cache cleanup failed: " + (e?.message || e));
+      } finally {
+        await updateCacheStatus();
+        setTimeout(() => { btn.disabled = false; btn.innerHTML = original; }, 500);
+      }
+    }
+    document.getElementById("cleanCacheBtn").addEventListener("click", cleanCache);
+
     // Initial load & polls
     load();
     pollIndex();
     pollThumbs();
+    updateCacheStatus();
+    // refresh cache pill periodically
+    setInterval(updateCacheStatus, 120000); // every 2 min
+
     // Errors counter
     (function pollErrors(){
       let delay=8000;

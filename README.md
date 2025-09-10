@@ -43,16 +43,16 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 ## 📋 Documentation
 
-- [Quick Start](docs/quickstart.md)
-- [Configuration](docs/configuration.md)
-- [API Documentation](docs/api.md)
-- [Dashboard](docs/dashboard.md)
-- [Smart Lists](docs/smartlists.md)
-- [Search](docs/search.md)
-- [Client Setup](docs/clients.md)
-- [Project Scope](docs/scope.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [License](license.md)
+- 🚀 [Quick Start](docs/quickstart.md)
+- 🔧 [Configuration](docs/configuration.md)
+- 🌐 [API & Endpoints](docs/api.md)
+- 📊 [Dashboard](docs/dashboard.md)
+- 🧠 [Smart Lists](docs/smartlists.md)
+- 🔍 [Search](docs/search.md)
+- 📱 [Client Setup](docs/clients.md)
+- 🎯 [Project Scope](docs/scope.md)
+- 🛠️ [Troubleshooting](docs/troubleshooting.md)
+- 📄 [License](license.md)
 
 ---
 

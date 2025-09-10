@@ -1,5 +1,7 @@
 ## 🛠️ Troubleshooting
 
+> Access logs are disabled in the docker image. Enable them by removing `--no-access-log` from the `CMD` command in the Dockerfile. 
+
 ### Common Issues
 
 #### No Comics Appearing
@@ -21,6 +23,9 @@
 #### Wrong Links/URLs
 - **Behind proxy**: Set `SERVER_BASE` and `URL_PREFIX` correctly
 - **Protocol mismatch**: Ensure HTTP/HTTPS consistency
+
+#### Scan starts by itself:
+- `AUTO_INDEX_ON_START`: "false"
 
 ### Debug Commands
 

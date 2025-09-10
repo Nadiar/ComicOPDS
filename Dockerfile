@@ -23,4 +23,4 @@ ENV CONTENT_BASE_DIR=/library \
 EXPOSE 8080
 VOLUME ["/data", "/library"]
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--proxy-headers", "--forwarded-allow-ips", "*"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]

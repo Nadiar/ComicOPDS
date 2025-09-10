@@ -41,7 +41,7 @@ services:
       - "./data:/data"
 ```
 
-> 💡 This minimal configuration includes only the required environment variables. For additional optional settings like authentication, caching, and performance tuning, see the complete list at [Configuration](docs/configuration.md).
+> 💡 This minimal configuration includes only the required environment variables. For additional optional settings like authentication, caching, and performance tuning, see the complete list at [Configuration](configuration.md).
 
 ### Launch Commands
 

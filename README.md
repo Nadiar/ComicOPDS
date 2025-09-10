@@ -1,6 +1,7 @@
 # 📚 ComicOPDS
 
 ComicOPDS is a lightweight [OPDS 1.2](https://specs.opds.io/opds-1.2) server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  
+
 It's optimized for large libraries (10k–100k+ comics), supports FastAPI + SQLite + FTS5 search, thumbnail caching, and streaming (OPDS PSE 1.1).
 
 Works great with [Panels for iOS](https://panels.app) and other OPDS readers.

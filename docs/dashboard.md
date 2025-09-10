@@ -19,3 +19,7 @@ The dashboard provides a comprehensive overview of your comic library:
 - **Error Monitoring**: 
   - Thumbnail extraction error counter
   - Downloadable error log
+
+### Screenshot
+
+![](img/dashboard.PNG)

@@ -129,3 +129,7 @@ So you get a de-duplicated "what's the newest issue for each series?" view.
   - Distinct by series: on
   
 → One newest issue per Image series since 2018.
+
+### Screenshot
+
+![](img/smartlists.PNG)

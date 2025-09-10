@@ -29,6 +29,8 @@
 
 ### Debug Commands
 
+> Access logs are disabled in the docker image. Enable them by removing `--no-access-log` from the `CMD` command in the Dockerfile. 
+
 ```bash
 # View container logs
 docker compose logs -f comicopds

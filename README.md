@@ -49,6 +49,7 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 - [Smart Lists](docs/smartlists.md)
 - [Search](docs/search.md)
 - [Client Setup](docs/clients.md)
+- [Project Scope](docs/scope.md)
 - [Troubleshooting](docs/troubleshooting.md)
 - [License](license.md)
 

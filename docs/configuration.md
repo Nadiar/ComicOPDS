@@ -16,6 +16,10 @@
 | `PRECACHE_THUMBS`     | `false`     | If `true`, enables thumbnail generation when reindexing or via dashboard. |
 | `PRECACHE_ON_START`   | `false`     | If `true`, automatically triggers full thumbnail pre-cache at container start. Recommended `false` for large libraries.  |
 | `THUMB_WORKERS`       | `3`         | Number of parallel workers for thumbnail generation. Tune for your CPU/IO capacity. |
+| `PAGE_CACHE_TTL_DAYS`         | `14`       | Delete page-caches that have been idle for more than this many days. |
+| `PAGE_CACHE_MAX_BYTES`        | `10737418240` | Maximum total size of page-cache (10 GiB default). |
+| `PAGE_CACHE_AUTOCLEAN`        | `true`     | Enable automatic background cleanup of page-caches. |
+| `PAGE_CACHE_CLEAN_INTERVAL_MIN` | `360`    | Run page-cache cleanup every N minutes (360 = 6 hours). |
 
 ### 📚 Recommended Settings for Large Libraries (30k–100k+ comics)
 

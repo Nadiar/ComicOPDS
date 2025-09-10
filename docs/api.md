@@ -34,6 +34,8 @@ ComicOPDS exposes both user-facing endpoints (for OPDS clients and the dashboard
 | `/index/status` | `GET` | JSON status of current indexing task. |
 | `/thumbs/status` | `GET` | JSON status of current thumbnail caching task. |
 | `/thumbs/errors/log` | `GET` | Download the thumbnail extraction error log (`/data/thumbs_errors.log`). |
+| `/admin/pages/cleanup` | `POST` | Trigger manual cleanup of page-cache | 
+| `/pages/cache/status` | `GET` | Check page-cache size and statistics |
 
 ### 🧪 Debug Endpoints
 

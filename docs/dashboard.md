@@ -14,6 +14,7 @@ The dashboard provides a comprehensive overview of your comic library:
 - **Management Tools**:
   - Reindex library button
   - Pre-cache thumbnails button
+  - Clean pages-cache button
   - Progress bars for ongoing operations
 - **Error Monitoring**: 
   - Thumbnail extraction error counter

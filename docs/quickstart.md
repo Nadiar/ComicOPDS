@@ -29,23 +29,19 @@ Create a `docker-compose.yml` file:
 services:
   comicopds:
     image: gitea.baerentsen.space/frederikbaerentsen/comicopds:latest
+    container_name: comicopds
     restart: unless-stopped
     ports:
       - "8382:8080"
     environment:
       CONTENT_BASE_DIR: /library
       SERVER_BASE: "http://192.168.10.10:8382"   # Replace with your server IP/domain
-      URL_PREFIX: ""                             # set to "/comics" if behind a reverse proxy subpath
-      DISABLE_AUTH: "false"                      # set to true to disable authentication 
-      OPDS_BASIC_USER: "admin"
-      OPDS_BASIC_PASS: "change-me-please"        # Use a strong password!
-      ENABLE_WATCH: "false"                      # auto-update index on file changes
-      PRECACHE_THUMBS: "false"                   # set true to pre-cache thumbs on reindex
-      AUTO_INDEX_ON_START: "false"               # skip reindexing on each container start
     volumes:
       - "./comics:/library:ro"
       - "./data:/data"
 ```
+
+> 💡 This minimal configuration includes only the required environment variables. For additional optional settings like authentication, caching, and performance tuning, see the complete list at [Configuration](docs/configuration.md).
 
 ### Launch Commands
 

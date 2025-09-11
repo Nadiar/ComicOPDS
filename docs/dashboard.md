@@ -23,3 +23,7 @@ The dashboard provides a comprehensive overview of your comic library:
 ### Screenshot
 
 ![](img/dashboard.PNG)
+
+![](img/index.PNG)
+
+![](img/genthumbs.PNG)

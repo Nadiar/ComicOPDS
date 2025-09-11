@@ -56,6 +56,20 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 ---
 
+## 💪 Stress Test
+
+ComicOPDS has been stress tested using **170k+ CBZ files** generated using [CBZGenerator](https://gitea.baerentsen.space/FrederikBaerentsen/CBZGenerator). 
+
+**Performance Results:**
+- **Initial scan**: ~10 minutes for full library indexing
+- **Thumbnail generation**: ~30 minutes (depending on hardware)
+- **Hardware**: Tested on low-powered Intel N100 CPU with no performance issues
+- **Search**: Very fast response times with SQLite FTS5 even at this scale
+
+The server remains responsive during indexing and handles concurrent OPDS requests without degradation. Memory usage stays reasonable even with large libraries.
+
+---
+
 ## 🔗 Links
 
 - **Repository**: [Gitea](https://gitea.baerentsen.space/FrederikBaerentsen/ComicOPDS)

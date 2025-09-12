@@ -1,3 +1,5 @@
+![](docs/img/ComicOPDS_Header.png)
+
 # 📚 ComicOPDS
 
 ComicOPDS is a lightweight [OPDS 1.2](https://specs.opds.io/opds-1.2) server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  

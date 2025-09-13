@@ -41,7 +41,7 @@ app_logger.propagate = False
 def _truthy(v: str | None) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
-PAGE_CACHE_DIR = Path("/data/pages")  # already present in your file
+PAGE_CACHE_DIR = Path("/data/pages")  
 PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
 PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
 PAGE_CACHE_AUTOCLEAN = _truthy(os.getenv("PAGE_CACHE_AUTOCLEAN", "true")) # run background cleaner
@@ -983,14 +983,13 @@ def _smartlists_load():
         try:
             with SMARTLISTS_PATH.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            # support legacy wrapper { "lists": [...] }
             if isinstance(data, dict) and "lists" in data and isinstance(data["lists"], list):
                 return data["lists"]
             if isinstance(data, list):
                 return data
         except Exception:
             pass
-    return []  # default
+    return []
 
 def _smartlists_save(lists):
     SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1067,7 +1066,6 @@ def thumbs_errors_count(_=Depends(require_basic)):
     mtime = 0.0
     if ERROR_LOG_PATH.exists():
         try:
-            # Fast line count
             with ERROR_LOG_PATH.open("rb") as f:
                 n = sum(1 for _ in f)
             st = ERROR_LOG_PATH.stat()

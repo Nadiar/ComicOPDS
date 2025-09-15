@@ -22,7 +22,7 @@
 
 #### Wrong Links/URLs
 - **Behind proxy**: Set `SERVER_BASE` and `URL_PREFIX` correctly
-- **Protocol mismatch**: Ensure HTTP/HTTPS consistency
+- **Protocol mismatch**: Ensure HTTP/HTTPS consistency (see [Notes on Clients and HTTPS](docs/clients.md#notes-on-clients-and-https) for more)
 
 #### Scan starts by itself:
 - `AUTO_INDEX_ON_START`: "false"

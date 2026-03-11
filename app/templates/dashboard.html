@@ -276,44 +276,52 @@
       return (v>=10? v.toFixed(0): v.toFixed(1))+" "+u[i];
     }
 
-    async function load(){
-      const d = await jget("/stats.json");
-      document.getElementById("lastUpdated").textContent = d.last_updated? new Date(d.last_updated*1000).toLocaleString() : "—";
-      document.getElementById("covers").textContent = d.total_covers ?? "0";
-      document.getElementById("totalComics").textContent = d.total_comics ?? "0";
-      document.getElementById("uniqueSeries").textContent = d.unique_series ?? "0";
-      document.getElementById("uniquePublishers").textContent = d.publishers ?? "0";
+    async function loadStats(){
+      try {
+        const d = await jget("/stats.json");
+        document.getElementById("lastUpdated").textContent = d.last_updated? new Date(d.last_updated*1000).toLocaleString() : "—";
+        document.getElementById("covers").textContent = d.total_covers ?? "0";
+        document.getElementById("totalComics").textContent = d.total_comics ?? "0";
+        document.getElementById("uniqueSeries").textContent = d.unique_series ?? "0";
+        document.getElementById("uniquePublishers").textContent = d.publishers ?? "0";
 
-      // Formats KPI + chart
-      const fmt = mapFormats(d);
-      document.getElementById("formats").textContent = String(fmt.kinds || 0);
-      const hasFormats = (fmt.values.reduce((a,b)=>a+b,0) > 0);
-      document.getElementById("formatsCardCol").style.display = hasFormats ? "" : "none";
+        // Formats KPI + chart
+        const fmt = mapFormats(d);
+        document.getElementById("formats").textContent = String(fmt.kinds || 0);
+        const hasFormats = (fmt.values.reduce((a,b)=>a+b,0) > 0);
+        document.getElementById("formatsCardCol").style.display = hasFormats ? "" : "none";
 
-      const pubs = mapPublishers(d);
-      const zipped = pubs.labels.map((l,i)=>({l, v: pubs.values[i]||0})).sort((a,b)=>b.v-a.v);
-      upsertChart("publishersChart",{ type:"doughnut", data:{labels:zipped.map(x=>x.l), datasets:[{data:zipped.map(x=>x.v)}]}, options:{...baseOptions, cutout:"60%", scales:{}} });
+        const pubs = mapPublishers(d);
+        const zipped = pubs.labels.map((l,i)=>({l, v: pubs.values[i]||0})).sort((a,b)=>b.v-a.v);
+        upsertChart("publishersChart",{ type:"doughnut", data:{labels:zipped.map(x=>x.l), datasets:[{data:zipped.map(x=>x.v)}]}, options:{...baseOptions, cutout:"60%", scales:{}} });
 
-      const tl = mapTimeline(d);
-      upsertChart("timelineChart",{ type:"line", data:{labels:tl.labels, datasets:[{ label:"Issues per year", data:tl.values, fill:true, tension:0.25, pointRadius:2 }]}, options:{...baseOptions} });
+        const tl = mapTimeline(d);
+        upsertChart("timelineChart",{ type:"line", data:{labels:tl.labels, datasets:[{ label:"Issues per year", data:tl.values, fill:true, tension:0.25, pointRadius:2 }]}, options:{...baseOptions} });
 
-      if (hasFormats){
-        upsertChart("formatsChart",{
-          type:"doughnut",
-          data:{ labels: fmt.labels, datasets:[{ data: fmt.values }]},
-          options:{ ...baseOptions, cutout:"60%", scales:{} }
-        });
-      } else {
-        const ex = Chart.getChart("formatsChart"); if (ex) ex.destroy();
+        if (hasFormats){
+          upsertChart("formatsChart",{
+            type:"doughnut",
+            data:{ labels: fmt.labels, datasets:[{ data: fmt.values }]},
+            options:{ ...baseOptions, cutout:"60%", scales:{} }
+          });
+        } else {
+          const ex = Chart.getChart("formatsChart"); if (ex) ex.destroy();
+        }
+
+        const tw = mapWriters(d);
+        upsertChart("writersChart",{ type:"bar", data:{labels:tw.labels, datasets:[{ label:"Issues", data:tw.values }]}, options:{...baseOptions, indexAxis:'y'} });
+      } catch (e) {
+        console.error("Failed to load stats:", e);
       }
+    }
 
-      const tw = mapWriters(d);
-      upsertChart("writersChart",{ type:"bar", data:{labels:tw.labels, datasets:[{ label:"Issues", data:tw.values }]}, options:{...baseOptions, indexAxis:'y'} });
-      
+    async function load(){
+      // Show user management independently of stats
       if (isMasterAdmin) {
         document.getElementById("userManagementSection").style.display = "block";
         loadUsers();
       }
+      await loadStats();
     }
     
     async function loadUsers() {
@@ -467,7 +475,7 @@
       try{
         const s = await jget("/index/status");
         showIndexUI(s);
-        if (shouldReloadCharts(s, lastIdx)) await load();
+        if (shouldReloadCharts(s, lastIdx)) await loadStats();
         delay = s.running ? 800 : 5000;
         lastIdx = s;
       }catch{ delay=5000; }

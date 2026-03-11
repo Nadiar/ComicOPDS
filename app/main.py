@@ -200,6 +200,7 @@ def _run_scan():
         
         existing_items = db.get_existing_items_mtime(conn)
         current_rels = set()
+        _uncommitted = 0
 
         for dirpath, dirnames, filenames in os.walk(LIBRARY_DIR):
             dpath = Path(dirpath)
@@ -247,7 +248,13 @@ def _run_scan():
                     db.upsert_meta(conn, rel=rel, meta=meta)
 
                 _index_progress(rel)
+                _uncommitted += 1
+                if _uncommitted >= 100:
+                    conn.commit()
+                    _uncommitted = 0
 
+        if _uncommitted:
+            conn.commit()
         db.cleanup_deleted_items(conn, current_rels)
         db.prune_stale(conn)
 
@@ -346,21 +353,20 @@ def startup():
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
 
-    if AUTO_INDEX_ON_START:
-        _start_scan(force=True)
-        return
-    # Run thumbnails pre-cache at startup even if no scan runs    
-    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
-        t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
-        t.start()
-
-    # Start pages auto-clean thread
+    # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:
         t = threading.Thread(target=_autoclean_loop, daemon=True)
         t.start()
         app_logger.info(f"Page cache auto-clean enabled: every {PAGE_CACHE_CLEAN_INTERVAL_MIN} min, "
                         f"ttl={PAGE_CACHE_TTL_DAYS}d, cap={PAGE_CACHE_MAX_BYTES} bytes")
 
+    if AUTO_INDEX_ON_START:
+        _start_scan(force=True)
+        return
+    # Run thumbnails pre-cache at startup even if no scan runs
+    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
+        t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
+        t.start()
 
     conn = db.connect()
     try:

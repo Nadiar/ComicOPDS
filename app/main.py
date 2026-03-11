@@ -1087,14 +1087,10 @@ def _autoclean_loop():
 # ------------------------------------------------------------------------------
 
 @app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page(request: Request, user: str = Depends(auth.require_admin)):
+def dashboard_page(request: Request, user: str = Depends(auth.require_admin)):
     """The dashboard is now restricted to users with is_admin=1 (or the master ENV admin)"""
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "base_url": URL_PREFIX,
-        "api_url": f"{URL_PREFIX}/api",
-        "username": user
-    })
+    tpl = env.get_template("dashboard.html")
+    return HTMLResponse(tpl.render())
 
 @app.get("/stats.json", response_class=JSONResponse)
 def stats(_=Depends(require_basic)):

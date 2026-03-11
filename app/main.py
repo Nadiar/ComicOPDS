@@ -24,6 +24,7 @@ from math import ceil
 from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
+from . import auth
 from .thumbs import have_thumb, generate_thumb
 from . import db  # SQLite adapter
 
@@ -120,6 +121,29 @@ def _abs_url(p: str) -> str:
 def _set_status(**kw):
     _INDEX_STATUS.update(kw)
 
+if __name__ == "__main__":
+    import uvicorn
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ComicOPDS Server")
+    parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
+    args = parser.parse_args()
+
+    # Pre-flight check: Connect to database to trigger the initial migrations
+    db.connect().close()
+
+    if args.scan_only:
+        print("Running specific filesystem scan (--scan-only)...")
+        _run_scan()
+        print("Success! Exiting.")
+        sys.exit(0)
+
+    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
+    # Uvicorn does run this block if called via `python main.py` or similar.
+    # However we will use the standard default for testing:
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")
+
 def _count_cbz(root: Path) -> int:
     n = 0
     for p in root.rglob("*"):
@@ -173,11 +197,16 @@ def _run_scan():
 
         total = _count_cbz(LIBRARY_DIR)
         _set_status(total=total, phase="indexing")
+        
+        existing_items = db.get_existing_items_mtime(conn)
+        current_rels = set()
 
         for dirpath, dirnames, filenames in os.walk(LIBRARY_DIR):
             dpath = Path(dirpath)
             if dpath != LIBRARY_DIR:
                 rel_d = dpath.relative_to(LIBRARY_DIR).as_posix()
+                current_rels.add(rel_d)
+                # Dirs are cheap so we can just blindly upsert them
                 db.upsert_dir(
                     conn,
                     rel=rel_d,
@@ -191,13 +220,25 @@ def _run_scan():
                 if p.suffix.lower() != ".cbz":
                     continue
                 rel = p.relative_to(LIBRARY_DIR).as_posix()
+                current_rels.add(rel)
                 st = p.stat()
+                mtime = st.st_mtime
+                size = st.st_size
+                
+                # Check for existing matching item
+                existing = existing_items.get(rel)
+                
+                if existing and existing[0] == float(mtime) and existing[1] == int(size):
+                    # We have a matching file size & mtime, so skip the costly metadata parsing
+                    _index_progress(rel)
+                    continue
+
                 db.upsert_file(
                     conn,
                     rel=rel,
                     name=p.stem,
-                    size=st.st_size,
-                    mtime=st.st_mtime,
+                    size=size,
+                    mtime=mtime,
                     parent=_parent_rel(rel),
                     ext="cbz",
                 )
@@ -207,6 +248,7 @@ def _run_scan():
 
                 _index_progress(rel)
 
+        db.cleanup_deleted_items(conn, current_rels)
         db.prune_stale(conn)
 
         # after scanning and pruning
@@ -271,7 +313,14 @@ def _run_precache_thumbs(workers: int):
 
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
-
+@app.post("/admin/reindex")
+def trigger_reindex(_=Depends(auth.require_admin)):
+    """Trigger the background scanner to perform an incremental update."""
+    if _INDEX_STATUS["running"]:
+        return {"status": "already_running"}
+        
+    threading.Thread(target=_run_scan, daemon=True).start()
+    return {"status": "started"}
 
 def _start_scan(force=False):
     if not force and _INDEX_STATUS["running"]:
@@ -492,13 +541,150 @@ def _entry_xml_from_row(row) -> str:
             categories=_categories_from_row(row),
         )
 
+# -------------------- OPDS 2.0 helpers (JSON) --------------------
+def _prefers_opds2(request: Request) -> bool:
+    if not request:
+        return False
+    accept_headers = request.headers.get("accept", "").split(",")
+    for header in accept_headers:
+        media_type = header.split(";")[0].strip().lower()
+        if media_type in ("application/opds+json", "application/json"):
+            return True
+        elif media_type == "application/atom+xml":
+            return False
+    return False
+
+def _entry_json_from_row(row) -> dict:
+    base = SERVER_BASE.rstrip("/")
+    if row["is_dir"]:
+        href = f"/opds?path={quote(row['rel'])}" if row["rel"] else "/opds"
+        return {
+            "title": row["name"] or "/",
+            "href": f"{base}{_abs_url(href)}",
+            "type": "application/opds+json"
+        }
+    else:
+        rel = row["rel"]
+        abs_file = LIBRARY_DIR / rel
+
+        download_href = f"/download?path={quote(rel)}"
+        pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
+        page_count = 0
+        try:
+            if abs_file.exists():
+                page_count = len(_cbz_list_pages(abs_file))
+        except Exception:
+            page_count = 0
+
+        comicvine_issue = rget(row, "comicvineissue")
+        thumb_href_abs = None
+        if (rget(row, "ext") or "").lower() == "cbz":
+            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
+            if p:
+                thumb_href_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
+
+        pub = {
+            "metadata": {
+                "title": _display_title(row),
+                "author": [{"name": a} for a in _authors_from_row(row)],
+                "identifier": f"{base}{_abs_url(download_href)}",
+                "modified": now_rfc3339()
+            },
+            "links": [
+                {
+                    "rel": "http://opds-spec.org/acquisition",
+                    "href": f"{base}{_abs_url(download_href)}",
+                    "type": mime_for(abs_file)
+                },
+                {
+                    "rel": "http://vaemendis.net/opds-pse/stream",
+                    "href": f"{base}{_abs_url(pse_template)}",
+                    "type": "image/jpeg",
+                    "properties": {
+                        "numberOfItems": page_count
+                    },
+                    "templated": True
+                }
+            ],
+            "images": []
+        }
+
+        issued = _issued_from_row(row)
+        if issued:
+            pub["metadata"]["published"] = issued
+            
+        summary = rget(row, "summary")
+        if summary:
+            pub["metadata"]["description"] = summary
+
+        cats = _categories_from_row(row)
+        if cats:
+            pub["metadata"]["subject"] = [{"name": c} for c in cats]
+
+        if thumb_href_abs:
+            pub["images"].append({
+                "href": thumb_href_abs,
+                "type": "image/jpeg",
+                "rel": "http://opds-spec.org/image"
+            })
+            pub["images"].append({
+                "href": thumb_href_abs,
+                "type": "image/jpeg",
+                "rel": "http://opds-spec.org/image/thumbnail"
+            })
+            
+        return pub
+
+def _feed_json(rows: list, title: str, self_href: str,
+          next_href: Optional[str] = None,
+          os_total: Optional[int] = None,
+          os_start: Optional[int] = None,
+          os_items: Optional[int] = None,
+          search_href: str = "/opds/search.xml",
+          start_href_override: Optional[str] = None) -> dict:
+          
+    base = SERVER_BASE.rstrip("/")
+    feed = {
+        "metadata": {
+            "title": title,
+            "modified": now_rfc3339()
+        },
+        "links": [
+            {"rel": "self", "href": f"{base}{_abs_url(self_href)}", "type": "application/opds+json"},
+            {"rel": "start", "href": f"{base}{_abs_url(start_href_override or '/opds')}", "type": "application/opds+json"},
+            {"rel": "search", "href": f"{base}{_abs_url(search_href)}", "type": "application/opensearchdescription+xml"}
+        ],
+        "navigation": [],
+        "publications": []
+    }
+    
+    if os_total is not None:
+        feed["metadata"]["numberOfItems"] = os_total
+    
+    if next_href:
+        feed["links"].append({"rel": "next", "href": f"{base}{_abs_url(next_href)}", "type": "application/opds+json"})
+        
+    for r in rows:
+        if isinstance(r, dict) and 'is_smart' in r:
+            feed["navigation"].append({"title": r["title"], "href": r["href"], "type": "application/opds+json", "rel": "subsection"})
+            continue
+        
+        entry = _entry_json_from_row(r)
+        if r.get("is_dir") if isinstance(r, dict) else r["is_dir"]:
+            entry["rel"] = "subsection"
+            feed["navigation"].append(entry)
+        else:
+            feed["publications"].append(entry)
+            
+    return feed
+
 # -------------------- Routes --------------------
 @app.get("/healthz")
 def health():
     return PlainTextResponse("ok")
 
 @app.get("/opds", response_class=Response)
-def browse(path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
+def browse(request: Request, path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
     path = path.strip("/")
     conn = db.connect()
     try:
@@ -508,30 +694,51 @@ def browse(path: str = Query("", description="Relative folder path"), page: int 
     finally:
         conn.close()
 
-    entries_xml = [_entry_xml_from_row(r) for r in rows]
-
-    # "Smart Lists" virtual folder at root/page 1
-    if path == "" and page == 1:
-        tpl = env.get_template("entry.xml.j2")
-        base = SERVER_BASE.rstrip("/")
-        smart_href = _abs_url("/opds/smart")
-        smart_entry = tpl.render(
-            entry_id=f"{base}{smart_href}",
-            updated=now_rfc3339(),
-            title="📁 Smart Lists",
-            is_dir=True,
-            href_abs=f"{base}{smart_href}",
-        )
-        entries_xml = [smart_entry] + entries_xml
-
+    is_opds2 = _prefers_opds2(request)
     self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
     next_href = f"/opds?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
-    xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+
+    if is_opds2:
+        row_dicts = [dict(r) for r in rows]
+        if path == "" and page == 1:
+            base = SERVER_BASE.rstrip("/")
+            smart_href = _abs_url("/opds/smart")
+            row_dicts.insert(0, {
+                "is_smart": True,
+                "title": "📁 Smart Lists",
+                "href": f"{base}{smart_href}"
+            })
+            
+        feed_dict = _feed_json(
+            row_dicts, 
+            title=f"/{path}" if path else "Library", 
+            self_href=self_href, 
+            next_href=next_href
+        )
+        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+    else:
+        entries_xml = [_entry_xml_from_row(r) for r in rows]
+
+        # "Smart Lists" virtual folder at root/page 1
+        if path == "" and page == 1:
+            tpl = env.get_template("entry.xml.j2")
+            base = SERVER_BASE.rstrip("/")
+            smart_href = _abs_url("/opds/smart")
+            smart_entry = tpl.render(
+                entry_id=f"{base}{smart_href}",
+                updated=now_rfc3339(),
+                title="📁 Smart Lists",
+                is_dir=True,
+                href_abs=f"{base}{smart_href}",
+            )
+            entries_xml = [smart_entry] + entries_xml
+
+        xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 @app.get("/", response_class=Response)
-def root(_=Depends(require_basic)):
-    return browse(path="", page=1)
+def root(request: Request, _=Depends(require_basic)):
+    return browse(request=request, path="", page=1)
 
 # ---- OpenSearch (descriptor) + Search results (OPDS 1.x) ----
 @app.get("/opds/search.xml", response_class=Response)
@@ -541,13 +748,13 @@ def opensearch_description(_=Depends(require_basic)):
     return Response(content=xml, media_type="application/opensearchdescription+xml")
 
 @app.get("/opds/search", response_class=Response)
-def opds_search(query: str | None = Query(None, alias="query"),
+def opds_search(request: Request,
+                query: str | None = Query(None, alias="query"),
                 page: int | None = Query(None),
-                request: Request = None,
                 _=Depends(require_basic)):
     term = (query or "").strip()
     if not term:
-        return browse(path="", page=1)
+        return browse(request=request, path="", page=1)
 
     items = PAGE_SIZE
     pg = max(1, int(page or 1))
@@ -560,22 +767,38 @@ def opds_search(query: str | None = Query(None, alias="query"),
     finally:
         conn.close()
 
-    entries_xml = [_entry_xml_from_row(r) for r in rows]
     self_href = f"/opds/search?query={quote(term)}&page={pg}"
     next_href = f"/opds/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
 
-    xml = _feed(
-        entries_xml,
-        title=f"Search: {term}",
-        self_href=self_href,
-        next_href=next_href,
-        os_total=total,
-        os_start=offset + 1 if total > 0 else 0,
-        os_items=items,
-        search_href="/opds/search.xml",
-        start_href_override="/opds",
-    )
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+    is_opds2 = _prefers_opds2(request)
+    if is_opds2:
+        row_dicts = [dict(r) for r in rows]
+        feed_dict = _feed_json(
+            row_dicts,
+            title=f"Search: {term}",
+            self_href=self_href,
+            next_href=next_href,
+            os_total=total,
+            os_start=offset + 1 if total > 0 else 0,
+            os_items=items,
+            search_href="/opds/search.xml",
+            start_href_override="/opds",
+        )
+        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+    else:
+        entries_xml = [_entry_xml_from_row(r) for r in rows]
+        xml = _feed(
+            entries_xml,
+            title=f"Search: {term}",
+            self_href=self_href,
+            next_href=next_href,
+            os_total=total,
+            os_start=offset + 1 if total > 0 else 0,
+            os_items=items,
+            search_href="/opds/search.xml",
+            start_href_override="/opds",
+        )
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
@@ -859,24 +1082,117 @@ def _autoclean_loop():
         time.sleep(interval)
 
 
-# -------------------- Dashboard & stats --------------------
+# ------------------------------------------------------------------------------
+# User Administration UI
+# ------------------------------------------------------------------------------
+
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(_=Depends(require_basic)):
-    tpl = env.get_template("dashboard.html")
-    return HTMLResponse(tpl.render())
+async def dashboard_page(request: Request, user: str = Depends(auth.require_admin)):
+    """The dashboard is now restricted to users with is_admin=1 (or the master ENV admin)"""
+    return templates.TemplateResponse("dashboard.html", {
+        "request": request,
+        "base_url": URL_PREFIX,
+        "api_url": f"{URL_PREFIX}/api",
+        "username": user
+    })
 
 @app.get("/stats.json", response_class=JSONResponse)
 def stats(_=Depends(require_basic)):
     conn = db.connect()
     try:
-        payload = db.stats(conn)
+        return db.stats(conn)
     finally:
         conn.close()
+
+# ------------------------------------------------------------------------------
+# Admin API Routes (Users)
+# ------------------------------------------------------------------------------
+from pydantic import BaseModel
+from typing import List
+import sqlite3
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    is_admin: bool = False
+
+class UserUpdate(BaseModel):
+    password: str = None
+    is_admin: bool = None
+
+@app.get("/api/users")
+def list_users(_=Depends(auth.require_admin)):
+    conn = db.connect()
+    try:
+        rows = conn.execute("SELECT id, username, is_admin FROM users").fetchall()
+        return [{"id": r["id"], "username": r["username"], "is_admin": bool(r["is_admin"])} for r in rows]
+    finally:
+        conn.close()
+
+@app.post("/api/users")
+def create_user(user: UserCreate, _=Depends(auth.require_admin)):
+    import bcrypt
+    conn = db.connect()
+    try:
+        hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        conn.execute(
+            "INSERT INTO users (username, password_hash, is_admin) VALUES (?, ?, ?)",
+            (user.username, hashed, 1 if user.is_admin else 0)
+        )
+        conn.commit()
+        return {"status": "ok"}
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    finally:
+        conn.close()
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int, user: UserUpdate, _=Depends(auth.require_admin)):
+    import bcrypt
+    conn = db.connect()
+    try:
+        if user_id == 1:
+            raise HTTPException(status_code=403, detail="Cannot modify the master Admin account from the UI. Change OPDS_BASIC_PASS in your docker environment.")
+        
+        updates = []
+        params = []
+        if user.password:
+            hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            updates.append("password_hash = ?")
+            params.append(hashed)
+        if user.is_admin is not None:
+            updates.append("is_admin = ?")
+            params.append(1 if user.is_admin else 0)
+            
+        if updates:
+            params.append(user_id)
+            conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+            conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+@app.delete("/api/users/{user_id}")
+def delete_user(user_id: int, _=Depends(auth.require_admin)):
+    conn = db.connect()
+    try:
+        if user_id == 1:
+            raise HTTPException(status_code=403, detail="Cannot delete the master Admin account.")
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return {"status": "ok"}
+    finally:
+        conn.close()
+
+# ------------------------------------------------------------------------------
+# Image Serving
+# ------------------------------------------------------------------------------
 
     thumbs_dir = Path("/data/thumbs")
     total_covers = 0
     if thumbs_dir.exists():
         total_covers = sum(1 for _ in thumbs_dir.glob("*.jpg"))
+    payload = db.stats(conn)
     payload["total_covers"] = total_covers
 
     return JSONResponse(payload)
@@ -910,26 +1226,41 @@ def _save_smartlists(lists: list[dict]) -> None:
     SMARTLISTS_PATH.write_text(json.dumps(lists, ensure_ascii=False, indent=0), encoding="utf-8")
 
 @app.get("/opds/smart", response_class=Response)
-def opds_smart_lists(_=Depends(require_basic)):
+def opds_smart_lists(request: Request, _=Depends(require_basic)):
     lists = _load_smartlists()
-    tpl = env.get_template("entry.xml.j2")
-    entries = []
-    for sl in lists:
-        href = f"/opds/smart/{quote(sl['slug'])}"
-        entries.append(
-            tpl.render(
-                entry_id=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
-                updated=now_rfc3339(),
-                title=sl["name"],
-                is_dir=True,
-                href_abs=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
+    is_opds2 = _prefers_opds2(request)
+    
+    if is_opds2:
+        row_dicts = []
+        base = SERVER_BASE.rstrip("/")
+        for sl in lists:
+            href = f"/opds/smart/{quote(sl['slug'])}"
+            row_dicts.append({
+                "is_smart": True,
+                "title": sl["name"],
+                "href": f"{base}{_abs_url(href)}"
+            })
+        feed_dict = _feed_json(row_dicts, title="Smart Lists", self_href="/opds/smart")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+    else:
+        tpl = env.get_template("entry.xml.j2")
+        entries = []
+        for sl in lists:
+            href = f"/opds/smart/{quote(sl['slug'])}"
+            entries.append(
+                tpl.render(
+                    entry_id=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
+                    updated=now_rfc3339(),
+                    title=sl["name"],
+                    is_dir=True,
+                    href_abs=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
+                )
             )
-        )
-    xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 @app.get("/opds/smart/{slug}", response_class=Response)
-def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
+def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(require_basic)):
     lists = _load_smartlists()
     sl = next((x for x in lists if x.get("slug") == slug), None)
     if not sl:
@@ -964,14 +1295,20 @@ def opds_smart_list(slug: str, page: int = 1, _=Depends(require_basic)):
     # Total for navigation honors the hard cap
     total_for_nav = min(total, sl_limit) if sl_limit > 0 else total
 
-    entries_xml = [_entry_xml_from_row(r) for r in rows]
     self_href = f"/opds/smart/{quote(slug)}?page={page}"
     next_href = None
     if (start + len(rows)) < total_for_nav:
         next_href = f"/opds/smart/{quote(slug)}?page={page+1}"
 
-    xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+    is_opds2 = _prefers_opds2(request)
+    if is_opds2:
+        row_dicts = [dict(r) for r in rows]
+        feed_dict = _feed_json(row_dicts, title=sl["name"], self_href=self_href, next_href=next_href)
+        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+    else:
+        entries_xml = [_entry_xml_from_row(r) for r in rows]
+        xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):

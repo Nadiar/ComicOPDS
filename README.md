@@ -1,8 +1,10 @@
 ![](docs/img/ComicOPDS_Header.png)
 
-# 📚 ComicOPDS
+# 📚 ComicOPDS (Community Fork)
 
-ComicOPDS is a lightweight [OPDS 1.2](https://specs.opds.io/opds-1.2) server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  
+> **Note:** This repository is an enhanced fork of the original [ComicOPDS by Frederik Baerentsen](https://gitea.baerentsen.space/FrederikBaerentsen/ComicOPDS). All credit for the core application goes to the original author. This community fork introduces several significant enhancements including full OPDS 2.0 support, background scanning, user administration, and trusted proxy support.
+
+ComicOPDS is a lightweight **OPDS 1.2 and OPDS 2.0** server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  
 
 It's optimized for large libraries (10k–100k+ comics), supports FastAPI + SQLite + FTS5 search, thumbnail caching, and streaming (OPDS PSE 1.1).
 
@@ -11,6 +13,15 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 ---
 
 ## ✨ Features
+
+**🚀 Added in this Fork:**
+- **OPDS 2.0 Support:** Automatic content-negotiation serving OPDS 1.2 or 2.0 specs depending on the reader client's `Accept` header.
+- **Incremental Background Scanner:** Fast, non-destructive background scanning using file modification times, scheduled natively via Docker `cron`.
+- **User Administration UI:** Manage application users via a visual dashboard interface.
+- **Role-Based Access Control:** Separate standard "read-only" users from dashboard administrators.
+- **Trusted Proxy Support:** Accurately handle CIDR-defined reverse proxy `X-Forwarded-For` and `X-Real-IP` headers.
+
+**📦 Original Core Features:**
 
 - 📂 Browse your folder hierarchy
 - 🔍 Full-text search (title, series, writer, publisher, year, etc.)

@@ -10,7 +10,7 @@ services:
       URL_PREFIX: ""                               # or "/comics" if served under a subpath
       DISABLE_AUTH: "false"
       OPDS_BASIC_USER: "admin"
-      OPDS_BASIC_PASS: "change-me"
+      OPDS_BASIC_PASS: "UGYMzCWR6cLGW3GF3q6KuRsPRhGp8rRX"
       ACTIVATE_CRON: "true"
       CRON_SCHEDULE: "0 * * * *"
       AUTO_INDEX_ON_START: "false"

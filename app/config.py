@@ -23,3 +23,6 @@ PRECACHE_THUMBS = os.getenv("PRECACHE_THUMBS", "false").strip().lower() not in (
 THUMB_WORKERS = max(1, int(os.getenv("THUMB_WORKERS", "2")))
 PRECACHE_ON_START = os.getenv("PRECACHE_ON_START", "false").strip().lower() in ("1","true","yes")
 AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() not in ("0","false","no","off")
+
+# Default trusted proxy subnets are standard private boundaries.
+TRUSTED_PROXIES_STR = os.getenv("TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")

@@ -99,14 +99,59 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     except Exception:
         HAS_FTS5 = False
 
+    conn.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0
+    )
+    """)
+
+    # Seed the Admin user (ID=1) on DB initialization using the ENV vars
+    from .auth import USER, PASS
+    import bcrypt
+    
+    admin_exists = conn.execute("SELECT 1 FROM users WHERE id=1").fetchone()
+    if not admin_exists:
+        hashed = bcrypt.hashpw(PASS.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        conn.execute(
+            "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
+            (1, USER, hashed, 1)
+        )
+        conn.commit()
+
 # ----------------------------- Scan lifecycle ---------------------------------
 
+def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, float]:
+    """Returns a dictionary of all current rel paths and their mtimes in the DB."""
+    rows = conn.execute("SELECT rel, mtime, size FROM items").fetchall()
+    # Add a fractional size check to the dictionary payload to ensure it covers both metadata cache changes
+    return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0)) for r in rows}
+
 def begin_scan(conn: sqlite3.Connection) -> None:
-    conn.execute("DELETE FROM items")
-    conn.execute("DELETE FROM meta")
-    if HAS_FTS5:
-        conn.execute("DELETE FROM fts")
-    conn.commit()
+    # No longer deletes everything; this is an incremental scan.
+    pass
+
+def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> int:
+    """Removes any rows in the database that are no longer present on disk."""
+    rows = conn.execute("SELECT rel FROM items").fetchall()
+    db_rels = {r["rel"] for r in rows}
+    
+    missing = db_rels - current_rels
+    if missing:
+        # SQLite maximum parameters per query is usually 999
+        batch_size = 900
+        missing_list = list(missing)
+        for i in range(0, len(missing_list), batch_size):
+            batch = missing_list[i:i + batch_size]
+            holders = ",".join(["?"] * len(batch))
+            conn.execute(f"DELETE FROM items WHERE rel IN ({holders})", batch)
+            conn.execute(f"DELETE FROM meta WHERE rel IN ({holders})", batch)
+            if HAS_FTS5:
+                conn.execute(f"DELETE FROM fts WHERE rel IN ({holders})", batch)
+        conn.commit()
+    return len(missing)
 
 def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime: float) -> None:
     conn.execute(

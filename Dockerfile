@@ -3,14 +3,16 @@ FROM python:3.12-slim
 WORKDIR /app
 COPY requirements.txt .
 
-# install system libs for Pillow (JPEG, PNG, WebP)
+# install system libs for Pillow and Cron
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libjpeg62-turbo zlib1g libpng16-16 libwebp7 wget \
+      libjpeg62-turbo zlib1g libpng16-16 libwebp7 wget cron \
   && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app /app/app
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 ENV CONTENT_BASE_DIR=/library \
     PAGE_SIZE=50 \
@@ -18,9 +20,13 @@ ENV CONTENT_BASE_DIR=/library \
     URL_PREFIX= \
     OPDS_BASIC_USER= \
     OPDS_BASIC_PASS= \
-    ENABLE_WATCH=true
+    ACTIVATE_CRON=true \
+    CRON_SCHEDULE="0 * * * *" \
+    TRUSTED_PROXIES="10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16"
 
 EXPOSE 8080
 VOLUME ["/data", "/library"]
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]

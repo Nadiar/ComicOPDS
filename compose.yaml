@@ -8,10 +8,11 @@ services:
       PAGE_SIZE: "50"
       SERVER_BASE: "http://10.0.0.1"   # <- set to your public domain
       URL_PREFIX: ""                               # or "/comics" if served under a subpath
-      DISABLE_AUTH: "true"
+      DISABLE_AUTH: "false"
       OPDS_BASIC_USER: "admin"
       OPDS_BASIC_PASS: "change-me"
-      ENABLE_WATCH: "false"                         # true/false (not 1/0)
+      ACTIVATE_CRON: "true"
+      CRON_SCHEDULE: "0 * * * *"
       AUTO_INDEX_ON_START: "false"
       PRECACHE_THUMBS: "true"
       PRECACHE_ON_START: "false"   #  trigger at boot

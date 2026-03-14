@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import email.utils
 import hashlib
 import json
 import logging
@@ -12,25 +13,21 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Dict, Any, Optional
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from PIL import Image
+from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
 from fastapi.responses import (
-    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse,
+    StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
 )
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from PIL import Image
 
 from . import auth, db
-from .config import (
-    AUTO_INDEX_ON_START, LIBRARY_DIR, PAGE_CACHE_AUTOCLEAN,
-    PAGE_CACHE_CLEAN_INTERVAL_MIN, PAGE_CACHE_DIR, PAGE_CACHE_MAX_BYTES,
-    PAGE_CACHE_TTL_DAYS, PAGE_SIZE, PRECACHE_ON_START, PRECACHE_THUMBS,
-    SERVER_BASE, THUMB_WORKERS, URL_PREFIX,
-)
-from .opds import mime_for, now_rfc3339
-from .thumbs import generate_thumb, have_thumb
+from .auth import require_basic
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START, _parse_bool
+from .opds import now_rfc3339, mime_for
+from .thumbs import have_thumb, generate_thumb
 
 # -------------------- Logging --------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
@@ -42,6 +39,13 @@ _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(m
 app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
+
+PAGE_CACHE_DIR = Path("/data/pages")
+PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
+PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
+PAGE_CACHE_AUTOCLEAN = _parse_bool("PAGE_CACHE_AUTOCLEAN", True) # run background cleaner
+PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.getenv("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360")) # every 6h
+
 
 def _mask_headers(h: dict) -> dict:
     masked = {}
@@ -112,32 +116,15 @@ def rget(row, key: str, default=None):
 def _abs_url(p: str) -> str:
     return (URL_PREFIX + p) if URL_PREFIX else p
 
+def _opds_cache_headers(last_mod: float) -> dict:
+    """HTTP caching headers for OPDS feed responses."""
+    return {
+        "Cache-Control": "private, max-age=60",
+        "Last-Modified": email.utils.formatdate(last_mod, usegmt=True),
+    }
+
 def _set_status(**kw):
-    with _INDEX_LOCK:
-        _INDEX_STATUS.update(kw)
-
-if __name__ == "__main__":
-    import uvicorn
-    import sys
-    import argparse
-
-    parser = argparse.ArgumentParser(description="ComicOPDS Server")
-    parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
-    args = parser.parse_args()
-
-    # Pre-flight check: Connect to database to trigger the initial migrations
-    db.connect().close()
-
-    if args.scan_only:
-        print("Running specific filesystem scan (--scan-only)...")
-        _run_scan()
-        print("Success! Exiting.")
-        sys.exit(0)
-
-    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
-    # Uvicorn does run this block if called via `python main.py` or similar.
-    # However we will use the standard default for testing:
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")
+    _INDEX_STATUS.update(kw)
 
 def _count_cbz(root: Path) -> int:
     n = 0
@@ -150,7 +137,18 @@ def _parent_rel(rel: str) -> str:
     return "" if "/" not in rel else rel.rsplit("/", 1)[0]
 
 def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
-    """Lightweight ComicInfo.xml reader."""
+    """Read ComicInfo.xml metadata from a CBZ file.
+
+    Extracts metadata from the ComicInfo.xml file embedded in a CBZ archive.
+    Returns an empty dictionary if the XML file is not found or parsing fails.
+
+    Args:
+        cbz_path: Path to the CBZ file to read metadata from.
+
+    Returns:
+        Dictionary with lowercase tag names as keys and text values from ComicInfo.xml.
+        Returns empty dict if no ComicInfo.xml is found or if any error occurs.
+    """
     from xml.etree import ElementTree as ET
     meta: Dict[str, Any] = {}
     try:
@@ -180,9 +178,8 @@ def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
     return meta
 
 def _index_progress(rel: str):
-    with _INDEX_LOCK:
-        _INDEX_STATUS["done"] += 1
-        _INDEX_STATUS["current"] = rel
+    _INDEX_STATUS["done"] += 1
+    _INDEX_STATUS["current"] = rel
 
 def _run_scan():
     """Background scanner: writes into SQLite using its own connection."""
@@ -230,6 +227,11 @@ def _run_scan():
                     _index_progress(rel)
                     continue
 
+                try:
+                    page_count = len(_cbz_list_pages(p))
+                except Exception:
+                    page_count = 0
+
                 db.upsert_file(
                     conn,
                     rel=rel,
@@ -238,6 +240,7 @@ def _run_scan():
                     mtime=mtime,
                     parent=_parent_rel(rel),
                     ext="cbz",
+                    page_count=page_count,
                 )
                 meta = _read_comicinfo(p)
                 if meta:
@@ -316,12 +319,18 @@ def _run_precache_thumbs(workers: int):
 
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
+@app.post("/admin/reindex")
+def trigger_reindex(_=Depends(auth.require_admin)):
+    """Trigger the background scanner to perform an incremental update."""
+    if _INDEX_STATUS["running"]:
+        return {"status": "already_running"}
+        
+    threading.Thread(target=_run_scan, daemon=True).start()
+    return {"status": "started"}
 
 def _start_scan(force=False):
-    with _INDEX_LOCK:
-        if not force and _INDEX_STATUS["running"]:
-            return
-        _INDEX_STATUS["running"] = True
+    if not force and _INDEX_STATUS["running"]:
+        return
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
@@ -334,6 +343,9 @@ def startup():
     if not LIBRARY_DIR.exists():
        raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
 
+    # Ensure admin user exists
+    db.ensure_admin_user(auth.USER, auth.PASS)
+
     # Show SQLite version + FTS status in logs
     conn = db.connect()
     try:
@@ -342,9 +354,6 @@ def startup():
         conn.close()
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
-
-    # Seed the default admin user if needed
-    db.seed_admin_user(auth.USER, auth.PASS)
 
     # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:
@@ -357,11 +366,7 @@ def startup():
         _start_scan(force=True)
         return
     # Run thumbnails pre-cache at startup even if no scan runs
-    with _INDEX_LOCK:
-        index_running = _INDEX_STATUS["running"]
-    with _THUMB_LOCK:
-        thumb_running = _THUMB_STATUS["running"]
-    if PRECACHE_ON_START and not index_running and not thumb_running:
+    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
         t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
         t.start()
 
@@ -377,6 +382,7 @@ def startup():
         _set_status(running=False, phase="idle", total=0, done=0, current="", ended_at=time.time())
 
 # -------------------- PSE (Page Streaming) helpers --------------------
+PAGE_CACHE_DIR = Path("/data/pages")
 VALID_PAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 def _cbz_list_pages(cbz_path: Path) -> list[str]:
@@ -508,18 +514,13 @@ def _entry_xml_from_row(row) -> str:
 
         # PSE: template URL & count (Panels-compatible)
         pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
-        page_count = 0
-        try:
-            if abs_file.exists():
-                page_count = len(_cbz_list_pages(abs_file))
-        except Exception:
-            page_count = 0
+        page_count = int(rget(row, "page_count") or 0)
 
         comicvine_issue = rget(row, "comicvineissue")
         thumb_href_abs = None
         image_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue)
             if p:
                 image_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
                 thumb_href_abs = image_abs
@@ -571,17 +572,12 @@ def _entry_json_from_row(row) -> dict:
 
         download_href = f"/download?path={quote(rel)}"
         pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
-        page_count = 0
-        try:
-            if abs_file.exists():
-                page_count = len(_cbz_list_pages(abs_file))
-        except Exception:
-            page_count = 0
+        page_count = int(rget(row, "page_count") or 0)
 
         comicvine_issue = rget(row, "comicvineissue")
         thumb_href_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue)
             if p:
                 thumb_href_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
 
@@ -639,6 +635,7 @@ def _entry_json_from_row(row) -> dict:
 
 def _feed_json(rows: list, title: str, self_href: str,
           next_href: Optional[str] = None,
+          prev_href: Optional[str] = None,
           os_total: Optional[int] = None,
           os_start: Optional[int] = None,
           os_items: Optional[int] = None,
@@ -662,9 +659,15 @@ def _feed_json(rows: list, title: str, self_href: str,
     
     if os_total is not None:
         feed["metadata"]["numberOfItems"] = os_total
-    
+
+    if os_items is not None:
+        feed["metadata"]["itemsPerPage"] = os_items
+
     if next_href:
         feed["links"].append({"rel": "next", "href": f"{base}{_abs_url(next_href)}", "type": "application/opds+json"})
+
+    if prev_href:
+        feed["links"].append({"rel": "previous", "href": f"{base}{_abs_url(prev_href)}", "type": "application/opds+json"})
         
     for r in rows:
         if isinstance(r, dict) and 'is_smart' in r:
@@ -693,12 +696,15 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         total = db.children_count(conn, path)
         start = (page - 1) * PAGE_SIZE
         rows = db.children_page(conn, path, PAGE_SIZE, start)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
 
+    cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
     self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
     next_href = f"/opds?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
+    prev_href = f"/opds?path={quote(path)}&page={page-1}" if page > 1 else None
 
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
@@ -710,14 +716,18 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
                 "title": "📁 Smart Lists",
                 "href": f"{base}{smart_href}"
             })
-            
+
         feed_dict = _feed_json(
-            row_dicts, 
-            title=f"/{path}" if path else "Library", 
-            self_href=self_href, 
-            next_href=next_href
+            row_dicts,
+            title=f"/{path}" if path else "Library",
+            self_href=self_href,
+            next_href=next_href,
+            prev_href=prev_href,
+            os_total=total,
+            os_start=start + 1 if total > 0 else 0,
+            os_items=PAGE_SIZE
         )
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
 
@@ -736,7 +746,7 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             entries_xml = [smart_entry] + entries_xml
 
         xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/", response_class=Response)
 def root(request: Request, _=Depends(require_basic)):
@@ -766,11 +776,14 @@ def opds_search(request: Request,
     try:
         rows = db.search_q(conn, term, items, offset)
         total = db.search_count(conn, term)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
 
+    cache_hdrs = _opds_cache_headers(last_mod)
     self_href = f"/opds/search?query={quote(term)}&page={pg}"
     next_href = f"/opds/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
+    prev_href = f"/opds/search?query={quote(term)}&page={pg-1}" if pg > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
@@ -780,13 +793,14 @@ def opds_search(request: Request,
             title=f"Search: {term}",
             self_href=self_href,
             next_href=next_href,
+            prev_href=prev_href,
             os_total=total,
             os_start=offset + 1 if total > 0 else 0,
             os_items=items,
             search_href="/opds/search.xml",
             start_href_override="/opds",
         )
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
         xml = _feed(
@@ -800,7 +814,7 @@ def opds_search(request: Request,
             search_href="/opds/search.xml",
             start_href_override="/opds",
         )
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
@@ -1115,8 +1129,8 @@ class UserCreate(BaseModel):
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
-    password: Optional[str] = None
-    is_admin: Optional[bool] = None
+    password: str = None
+    is_admin: bool = None
 
 @app.get("/api/users")
 def list_users(_=Depends(auth.require_admin)):
@@ -1188,7 +1202,7 @@ def delete_user(user_id: int, _=Depends(auth.require_admin)):
 
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = "", _=Depends(auth.require_admin)):
+def debug_children(path: str = "", _=Depends(require_basic)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -1217,6 +1231,12 @@ def _save_smartlists(lists: list[dict]) -> None:
 @app.get("/opds/smart", response_class=Response)
 def opds_smart_lists(request: Request, _=Depends(require_basic)):
     lists = _load_smartlists()
+    conn = db.connect()
+    try:
+        last_mod = db.last_modified(conn)
+    finally:
+        conn.close()
+    cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
     
     if is_opds2:
@@ -1230,7 +1250,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                 "href": f"{base}{_abs_url(href)}"
             })
         feed_dict = _feed_json(row_dicts, title="Smart Lists", self_href="/opds/smart")
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         tpl = env.get_template("entry.xml.j2")
         entries = []
@@ -1246,7 +1266,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                 )
             )
         xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/opds/smart/{slug}", response_class=Response)
 def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(require_basic)):
@@ -1278,8 +1298,11 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     try:
         rows = db.smartlist_query(conn, groups, sort, effective_page_size, start, distinct_flag)
         total = db.smartlist_count(conn, groups)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
+
+    cache_hdrs = _opds_cache_headers(last_mod)
 
     # Total for navigation honors the hard cap
     total_for_nav = min(total, sl_limit) if sl_limit > 0 else total
@@ -1288,16 +1311,26 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     next_href = None
     if (start + len(rows)) < total_for_nav:
         next_href = f"/opds/smart/{quote(slug)}?page={page+1}"
+    prev_href = f"/opds/smart/{quote(slug)}?page={page-1}" if page > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
-        feed_dict = _feed_json(row_dicts, title=sl["name"], self_href=self_href, next_href=next_href)
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        feed_dict = _feed_json(
+            row_dicts,
+            title=sl["name"],
+            self_href=self_href,
+            next_href=next_href,
+            prev_href=prev_href,
+            os_total=total_for_nav,
+            os_start=start + 1 if total_for_nav > 0 else 0,
+            os_items=PAGE_SIZE
+        )
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
         xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):
@@ -1364,29 +1397,24 @@ def index_status(_=Depends(require_basic)):
         usable = conn.execute("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)").fetchone()[0] == 1
     finally:
         conn.close()
-    with _INDEX_LOCK:
-        status = _INDEX_STATUS.copy()
-    return JSONResponse({**status, "usable": usable})
+    return JSONResponse({**_INDEX_STATUS, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(_=Depends(auth.require_admin)):
+def admin_reindex(_=Depends(require_basic)):
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
-def admin_thumbs_precache(_=Depends(auth.require_admin)):
-    with _THUMB_LOCK:
-        if _THUMB_STATUS["running"]:
-            return JSONResponse({"ok": True, "started": False, "reason": "already running"})
+def admin_thumbs_precache(_=Depends(require_basic)):
+    if _THUMB_STATUS["running"]:
+        return JSONResponse({"ok": True, "started": False, "reason": "already running"})
     t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
     t.start()
     return JSONResponse({"ok": True, "started": True})
 
 @app.get("/thumbs/status", response_class=JSONResponse)
 def thumbs_status(_=Depends(require_basic)):
-    with _THUMB_LOCK:
-        status = _THUMB_STATUS.copy()
-    return JSONResponse(status)
+    return JSONResponse(_THUMB_STATUS)
 
 # -------------------- Thumbs Errors --------------------
 
@@ -1428,3 +1456,27 @@ def pages_cache_status(_=Depends(require_basic)):
 def admin_pages_cleanup(_=Depends(require_basic)):
     res = _clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
     return JSONResponse({"ok": True, **res})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ComicOPDS Server")
+    parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
+    args = parser.parse_args()
+
+    # Pre-flight check: Connect to database to trigger the initial migrations
+    db.connect().close()
+
+    if args.scan_only:
+        print("Running specific filesystem scan (--scan-only)...")
+        _run_scan()
+        print("Success! Exiting.")
+        sys.exit(0)
+
+    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
+    # Uvicorn does run this block if called via `python main.py` or similar.
+    # However we will use the standard default for testing:
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")

@@ -344,7 +344,7 @@ def startup():
        raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
 
     # Ensure admin user exists
-    db.ensure_admin_user(auth.USER, auth.PASS)
+    db.seed_admin_user(auth.USER, auth.PASS)
 
     # Show SQLite version + FTS status in logs
     conn = db.connect()

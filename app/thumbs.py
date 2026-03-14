@@ -61,10 +61,9 @@ def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
     return p if p.exists() else None
 
 def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
+    """Save image as JPEG, converting to RGB if needed and resizing if oversized."""
     im = src_img
-    if im.mode not in ("RGB", "L"):
-        im = im.convert("RGB")
-    elif im.mode == "L":
+    if im.mode != "RGB":
         im = im.convert("RGB")
     dest.parent.mkdir(parents=True, exist_ok=True)
     # reasonable default size/quality; tweak if you wish
@@ -82,9 +81,9 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     return dest
 
 def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """Generate and cache thumbnail from CBZ cover image."""
-    """
-    Create the thumbnail if missing. Returns the path if it exists afterwards.
+    """Generate and cache thumbnail from CBZ cover image.
+
+    Returns the thumbnail path if successful, None on any error.
     Logs errors to /data/thumbs_errors.log via _log_thumb_error().
     """
     out = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
@@ -137,9 +136,7 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str])
         return None
 
 def ensure_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """Ensure thumbnail exists for item, generating it if necessary."""
-    """
-    Ensure a thumb exists (lazy). Uses LIBRARY_DIR and rel to find the CBZ.
+    """Ensure thumbnail exists for item, generating it if necessary.
     """
     existing = have_thumb(rel, comicvine_issue)
     if existing:

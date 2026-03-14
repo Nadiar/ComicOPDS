@@ -70,10 +70,21 @@ def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
     return p if p.exists() else None
 
 def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
+    """
+    Convert an image to RGB JPEG and save it to disk.
+
+    Converts non-RGB images to RGB (including grayscale), resizes if larger than 1200px,
+    and saves as optimized JPEG with quality 88.
+
+    Args:
+        src_img: PIL Image object
+        dest: Destination Path for JPEG file
+
+    Returns:
+        Path to saved JPEG file
+    """
     im = src_img
-    if im.mode not in ("RGB", "L"):
-        im = im.convert("RGB")
-    elif im.mode == "L":
+    if im.mode != "RGB":
         im = im.convert("RGB")
     dest.parent.mkdir(parents=True, exist_ok=True)
     # reasonable default size/quality; tweak if you wish

@@ -21,7 +21,11 @@ import sys
 import logging
 from math import ceil
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
+from .config import (
+    LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS,
+    PRECACHE_ON_START, AUTO_INDEX_ON_START, PAGE_CACHE_DIR, PAGE_CACHE_TTL_DAYS,
+    PAGE_CACHE_MAX_BYTES, PAGE_CACHE_AUTOCLEAN, PAGE_CACHE_CLEAN_INTERVAL_MIN
+)
 from .opds import now_rfc3339, mime_for
 from .auth import require_basic
 from . import auth
@@ -41,12 +45,6 @@ app_logger.propagate = False
 
 def _truthy(v: str | None) -> bool:
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-PAGE_CACHE_DIR = Path("/data/pages")  
-PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
-PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
-PAGE_CACHE_AUTOCLEAN = _truthy(os.getenv("PAGE_CACHE_AUTOCLEAN", "true")) # run background cleaner
-PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.getenv("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360")) # every 6h
 
 
 def _mask_headers(h: dict) -> dict:
@@ -119,7 +117,8 @@ def _abs_url(p: str) -> str:
     return (URL_PREFIX + p) if URL_PREFIX else p
 
 def _set_status(**kw):
-    _INDEX_STATUS.update(kw)
+    with _INDEX_LOCK:
+        _INDEX_STATUS.update(kw)
 
 if __name__ == "__main__":
     import uvicorn
@@ -185,8 +184,9 @@ def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
     return meta
 
 def _index_progress(rel: str):
-    _INDEX_STATUS["done"] += 1
-    _INDEX_STATUS["current"] = rel
+    with _INDEX_LOCK:
+        _INDEX_STATUS["done"] += 1
+        _INDEX_STATUS["current"] = rel
 
 def _run_scan():
     """Background scanner: writes into SQLite using its own connection."""
@@ -322,8 +322,9 @@ def _run_precache_thumbs(workers: int):
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
 
 def _start_scan(force=False):
-    if not force and _INDEX_STATUS["running"]:
-        return
+    with _INDEX_LOCK:
+        if not force and _INDEX_STATUS["running"]:
+            return
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
@@ -356,7 +357,11 @@ def startup():
         _start_scan(force=True)
         return
     # Run thumbnails pre-cache at startup even if no scan runs
-    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
+    with _INDEX_LOCK:
+        index_running = _INDEX_STATUS["running"]
+    with _THUMB_LOCK:
+        thumb_running = _THUMB_STATUS["running"]
+    if PRECACHE_ON_START and not index_running and not thumb_running:
         t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
         t.start()
 
@@ -372,7 +377,6 @@ def startup():
         _set_status(running=False, phase="idle", total=0, done=0, current="", ended_at=time.time())
 
 # -------------------- PSE (Page Streaming) helpers --------------------
-PAGE_CACHE_DIR = Path("/data/pages")
 VALID_PAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 def _cbz_list_pages(cbz_path: Path) -> list[str]:
@@ -1360,7 +1364,9 @@ def index_status(_=Depends(require_basic)):
         usable = conn.execute("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)").fetchone()[0] == 1
     finally:
         conn.close()
-    return JSONResponse({**_INDEX_STATUS, "usable": usable})
+    with _INDEX_LOCK:
+        status = _INDEX_STATUS.copy()
+    return JSONResponse({**status, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
 def admin_reindex(_=Depends(auth.require_admin)):
@@ -1369,15 +1375,18 @@ def admin_reindex(_=Depends(auth.require_admin)):
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
 def admin_thumbs_precache(_=Depends(require_basic)):
-    if _THUMB_STATUS["running"]:
-        return JSONResponse({"ok": True, "started": False, "reason": "already running"})
+    with _THUMB_LOCK:
+        if _THUMB_STATUS["running"]:
+            return JSONResponse({"ok": True, "started": False, "reason": "already running"})
     t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
     t.start()
     return JSONResponse({"ok": True, "started": True})
 
 @app.get("/thumbs/status", response_class=JSONResponse)
 def thumbs_status(_=Depends(require_basic)):
-    return JSONResponse(_THUMB_STATUS)
+    with _THUMB_LOCK:
+        status = _THUMB_STATUS.copy()
+    return JSONResponse(status)
 
 # -------------------- Thumbs Errors --------------------
 

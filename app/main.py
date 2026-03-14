@@ -1190,15 +1190,6 @@ def delete_user(user_id: int, _=Depends(auth.require_admin)):
 # Image Serving
 # ------------------------------------------------------------------------------
 
-    thumbs_dir = Path("/data/thumbs")
-    total_covers = 0
-    if thumbs_dir.exists():
-        total_covers = sum(1 for _ in thumbs_dir.glob("*.jpg"))
-    payload = db.stats(conn)
-    payload["total_covers"] = total_covers
-
-    return JSONResponse(payload)
-
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
 def debug_children(path: str = ""):

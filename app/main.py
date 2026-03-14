@@ -20,6 +20,7 @@ from PIL import Image
 import sys
 import logging
 from math import ceil
+import email.utils
 
 from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
 from .opds import now_rfc3339, mime_for
@@ -118,31 +119,15 @@ def rget(row, key: str, default=None):
 def _abs_url(p: str) -> str:
     return (URL_PREFIX + p) if URL_PREFIX else p
 
+def _opds_cache_headers(last_mod: float) -> dict:
+    """HTTP caching headers for OPDS feed responses."""
+    return {
+        "Cache-Control": "private, max-age=60",
+        "Last-Modified": email.utils.formatdate(last_mod, usegmt=True),
+    }
+
 def _set_status(**kw):
     _INDEX_STATUS.update(kw)
-
-if __name__ == "__main__":
-    import uvicorn
-    import sys
-    import argparse
-
-    parser = argparse.ArgumentParser(description="ComicOPDS Server")
-    parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
-    args = parser.parse_args()
-
-    # Pre-flight check: Connect to database to trigger the initial migrations
-    db.connect().close()
-
-    if args.scan_only:
-        print("Running specific filesystem scan (--scan-only)...")
-        _run_scan()
-        print("Success! Exiting.")
-        sys.exit(0)
-
-    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
-    # Uvicorn does run this block if called via `python main.py` or similar.
-    # However we will use the standard default for testing:
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")
 
 def _count_cbz(root: Path) -> int:
     n = 0
@@ -234,6 +219,11 @@ def _run_scan():
                     _index_progress(rel)
                     continue
 
+                try:
+                    page_count = len(_cbz_list_pages(p))
+                except Exception:
+                    page_count = 0
+
                 db.upsert_file(
                     conn,
                     rel=rel,
@@ -242,6 +232,7 @@ def _run_scan():
                     mtime=mtime,
                     parent=_parent_rel(rel),
                     ext="cbz",
+                    page_count=page_count,
                 )
                 meta = _read_comicinfo(p)
                 if meta:
@@ -512,18 +503,13 @@ def _entry_xml_from_row(row) -> str:
 
         # PSE: template URL & count (Panels-compatible)
         pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
-        page_count = 0
-        try:
-            if abs_file.exists():
-                page_count = len(_cbz_list_pages(abs_file))
-        except Exception:
-            page_count = 0
+        page_count = int(rget(row, "page_count") or 0)
 
         comicvine_issue = rget(row, "comicvineissue")
         thumb_href_abs = None
         image_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue)
             if p:
                 image_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
                 thumb_href_abs = image_abs
@@ -575,17 +561,12 @@ def _entry_json_from_row(row) -> dict:
 
         download_href = f"/download?path={quote(rel)}"
         pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
-        page_count = 0
-        try:
-            if abs_file.exists():
-                page_count = len(_cbz_list_pages(abs_file))
-        except Exception:
-            page_count = 0
+        page_count = int(rget(row, "page_count") or 0)
 
         comicvine_issue = rget(row, "comicvineissue")
         thumb_href_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue)
             if p:
                 thumb_href_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
 
@@ -697,9 +678,11 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         total = db.children_count(conn, path)
         start = (page - 1) * PAGE_SIZE
         rows = db.children_page(conn, path, PAGE_SIZE, start)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
 
+    cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
     self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
     next_href = f"/opds?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
@@ -714,14 +697,14 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
                 "title": "📁 Smart Lists",
                 "href": f"{base}{smart_href}"
             })
-            
+
         feed_dict = _feed_json(
-            row_dicts, 
-            title=f"/{path}" if path else "Library", 
-            self_href=self_href, 
+            row_dicts,
+            title=f"/{path}" if path else "Library",
+            self_href=self_href,
             next_href=next_href
         )
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
 
@@ -740,7 +723,7 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             entries_xml = [smart_entry] + entries_xml
 
         xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/", response_class=Response)
 def root(request: Request, _=Depends(require_basic)):
@@ -770,9 +753,11 @@ def opds_search(request: Request,
     try:
         rows = db.search_q(conn, term, items, offset)
         total = db.search_count(conn, term)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
 
+    cache_hdrs = _opds_cache_headers(last_mod)
     self_href = f"/opds/search?query={quote(term)}&page={pg}"
     next_href = f"/opds/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
 
@@ -790,7 +775,7 @@ def opds_search(request: Request,
             search_href="/opds/search.xml",
             start_href_override="/opds",
         )
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
         xml = _feed(
@@ -804,7 +789,7 @@ def opds_search(request: Request,
             search_href="/opds/search.xml",
             start_href_override="/opds",
         )
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
@@ -1190,18 +1175,9 @@ def delete_user(user_id: int, _=Depends(auth.require_admin)):
 # Image Serving
 # ------------------------------------------------------------------------------
 
-    thumbs_dir = Path("/data/thumbs")
-    total_covers = 0
-    if thumbs_dir.exists():
-        total_covers = sum(1 for _ in thumbs_dir.glob("*.jpg"))
-    payload = db.stats(conn)
-    payload["total_covers"] = total_covers
-
-    return JSONResponse(payload)
-
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = ""):
+def debug_children(path: str = "", _=Depends(require_basic)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -1230,6 +1206,12 @@ def _save_smartlists(lists: list[dict]) -> None:
 @app.get("/opds/smart", response_class=Response)
 def opds_smart_lists(request: Request, _=Depends(require_basic)):
     lists = _load_smartlists()
+    conn = db.connect()
+    try:
+        last_mod = db.last_modified(conn)
+    finally:
+        conn.close()
+    cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
     
     if is_opds2:
@@ -1243,7 +1225,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                 "href": f"{base}{_abs_url(href)}"
             })
         feed_dict = _feed_json(row_dicts, title="Smart Lists", self_href="/opds/smart")
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         tpl = env.get_template("entry.xml.j2")
         entries = []
@@ -1259,7 +1241,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                 )
             )
         xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/opds/smart/{slug}", response_class=Response)
 def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(require_basic)):
@@ -1291,8 +1273,11 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     try:
         rows = db.smartlist_query(conn, groups, sort, effective_page_size, start, distinct_flag)
         total = db.smartlist_count(conn, groups)
+        last_mod = db.last_modified(conn)
     finally:
         conn.close()
+
+    cache_hdrs = _opds_cache_headers(last_mod)
 
     # Total for navigation honors the hard cap
     total_for_nav = min(total, sl_limit) if sl_limit > 0 else total
@@ -1306,11 +1291,11 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
         feed_dict = _feed_json(row_dicts, title=sl["name"], self_href=self_href, next_href=next_href)
-        return JSONResponse(content=feed_dict, media_type="application/opds+json")
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
         xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):
@@ -1436,3 +1421,27 @@ def pages_cache_status(_=Depends(require_basic)):
 def admin_pages_cleanup(_=Depends(require_basic)):
     res = _clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
     return JSONResponse({"ok": True, **res})
+
+
+if __name__ == "__main__":
+    import uvicorn
+    import sys
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ComicOPDS Server")
+    parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
+    args = parser.parse_args()
+
+    # Pre-flight check: Connect to database to trigger the initial migrations
+    db.connect().close()
+
+    if args.scan_only:
+        print("Running specific filesystem scan (--scan-only)...")
+        _run_scan()
+        print("Success! Exiting.")
+        sys.exit(0)
+
+    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
+    # Uvicorn does run this block if called via `python main.py` or similar.
+    # However we will use the standard default for testing:
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")

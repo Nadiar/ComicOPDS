@@ -1,6 +1,7 @@
 # app/auth.py
 from fastapi import Security, HTTPException, status, Request, Depends
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from typing import Optional
 import os, secrets, logging, ipaddress
 
 log = logging.getLogger("comicopds.auth")
@@ -49,7 +50,7 @@ def get_real_client_ip(request: Request) -> str:
             
     return client_host
 
-def authenticate_user(credentials: HTTPBasicCredentials) -> dict:
+def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
     supplied_user = credentials.username.encode("utf8")
     supplied_pass = credentials.password.encode("utf8")
     

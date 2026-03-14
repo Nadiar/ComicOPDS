@@ -342,6 +342,9 @@ def startup():
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
 
+    # Seed the default admin user if needed
+    db.seed_admin_user(auth.USER, auth.PASS)
+
     # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:
         t = threading.Thread(target=_autoclean_loop, daemon=True)

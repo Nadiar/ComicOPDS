@@ -108,18 +108,27 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     """)
 
-    # Seed the Admin user (ID=1) on DB initialization using the ENV vars
-    from .auth import USER, PASS
+def seed_admin_user(username: str, password: str) -> None:
+    """Seed the default admin user (ID=1) if it doesn't exist.
+
+    Args:
+        username: Admin username from environment
+        password: Admin password from environment (plaintext, will be hashed)
+    """
     import bcrypt
-    
-    admin_exists = conn.execute("SELECT 1 FROM users WHERE id=1").fetchone()
-    if not admin_exists:
-        hashed = bcrypt.hashpw(PASS.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        conn.execute(
-            "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
-            (1, USER, hashed, 1)
-        )
-        conn.commit()
+
+    conn = connect()
+    try:
+        admin_exists = conn.execute("SELECT 1 FROM users WHERE id=1").fetchone()
+        if not admin_exists:
+            hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            conn.execute(
+                "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
+                (1, username, hashed, 1)
+            )
+            conn.commit()
+    finally:
+        conn.close()
 
 # ----------------------------- Scan lifecycle ---------------------------------
 

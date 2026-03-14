@@ -320,14 +320,6 @@ def _run_precache_thumbs(workers: int):
 
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
-@app.post("/admin/reindex")
-def trigger_reindex(_=Depends(auth.require_admin)):
-    """Trigger the background scanner to perform an incremental update."""
-    if _INDEX_STATUS["running"]:
-        return {"status": "already_running"}
-        
-    threading.Thread(target=_run_scan, daemon=True).start()
-    return {"status": "started"}
 
 def _start_scan(force=False):
     if not force and _INDEX_STATUS["running"]:
@@ -1192,7 +1184,7 @@ def delete_user(user_id: int, _=Depends(auth.require_admin)):
 
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = ""):
+def debug_children(path: str = "", _=Depends(auth.require_admin)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -1371,7 +1363,7 @@ def index_status(_=Depends(require_basic)):
     return JSONResponse({**_INDEX_STATUS, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(_=Depends(require_basic)):
+def admin_reindex(_=Depends(auth.require_admin)):
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
 

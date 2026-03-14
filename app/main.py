@@ -1,33 +1,33 @@
 from __future__ import annotations
 
+import email.utils
+import hashlib
+import json
+import logging
+import os
+import re
+import sys
+import threading
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from math import ceil
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from urllib.parse import quote
+
+from PIL import Image
 from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
 from fastapi.responses import (
     StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
 )
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote
-import threading
-import time
-import os
-import re
-import json
-import zipfile
-import hashlib
-from PIL import Image
-import sys
-import logging
-from math import ceil
-import email.utils
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
-from .opds import now_rfc3339, mime_for
+from . import auth, db
 from .auth import require_basic
-from . import auth
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START, _parse_bool
+from .opds import now_rfc3339, mime_for
 from .thumbs import have_thumb, generate_thumb
-from . import db  # SQLite adapter
 
 # -------------------- Logging --------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
@@ -40,13 +40,10 @@ app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
 
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-PAGE_CACHE_DIR = Path("/data/pages")  
+PAGE_CACHE_DIR = Path("/data/pages")
 PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
 PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
-PAGE_CACHE_AUTOCLEAN = _truthy(os.getenv("PAGE_CACHE_AUTOCLEAN", "true")) # run background cleaner
+PAGE_CACHE_AUTOCLEAN = _parse_bool("PAGE_CACHE_AUTOCLEAN", True) # run background cleaner
 PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.getenv("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360")) # every 6h
 
 
@@ -345,6 +342,9 @@ def debug_fts(_=Depends(require_basic)):
 def startup():
     if not LIBRARY_DIR.exists():
        raise RuntimeError(f"CONTENT_BASE_DIR does not exist: {LIBRARY_DIR}")
+
+    # Ensure admin user exists
+    db.ensure_admin_user(auth.USER, auth.PASS)
 
     # Show SQLite version + FTS status in logs
     conn = db.connect()

@@ -1,11 +1,13 @@
 # app/thumbs.py
 from __future__ import annotations
 
-import logging, warnings
+import hashlib
+import logging
+import warnings
+import zipfile
 from pathlib import Path
 from typing import Optional
-import hashlib
-import zipfile
+
 from PIL import Image, UnidentifiedImageError
 
 from .config import LIBRARY_DIR

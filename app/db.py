@@ -1,6 +1,7 @@
 # app/db.py
 from __future__ import annotations
 
+import bcrypt
 import re
 import sqlite3
 from pathlib import Path
@@ -77,6 +78,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "meta", "format"):
         _add_column(conn, "meta", "format", "TEXT")
 
+    # migration: ensure 'page_count' column exists
+    if not _column_exists(conn, "items", "page_count"):
+        _add_column(conn, "items", "page_count", "INTEGER")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_isdir    ON items(is_dir)")
@@ -108,18 +113,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     """)
 
-    # Seed the Admin user (ID=1) on DB initialization using the ENV vars
-    from .auth import USER, PASS
-    import bcrypt
-    
-    admin_exists = conn.execute("SELECT 1 FROM users WHERE id=1").fetchone()
-    if not admin_exists:
-        hashed = bcrypt.hashpw(PASS.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+def ensure_admin_user(username: str, password: str) -> None:
+    """Ensure admin user exists in database."""
+    conn = connect()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id=1").fetchone()
+        if row:
+            return
+        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         conn.execute(
             "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
-            (1, USER, hashed, 1)
+            (1, username, hashed, 1)
         )
         conn.commit()
+    finally:
+        conn.close()
 
 # ----------------------------- Scan lifecycle ---------------------------------
 
@@ -167,20 +175,21 @@ def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime
         (rel, name, parent, mtime),
     )
 
-def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str) -> None:
+def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str, page_count: int = 0) -> None:
     conn.execute(
         """
-        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
-        VALUES (?, ?, ?, 0, ?, ?, ?)
+        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext, page_count)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?)
         ON CONFLICT(rel) DO UPDATE SET
           name=excluded.name,
           parent=excluded.parent,
           is_dir=excluded.is_dir,
           size=excluded.size,
           mtime=excluded.mtime,
-          ext=excluded.ext
+          ext=excluded.ext,
+          page_count=excluded.page_count
         """,
-        (rel, name, parent, size, mtime, ext),
+        (rel, name, parent, size, mtime, ext, page_count),
     )
 
 def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:
@@ -242,6 +251,11 @@ def prune_stale(conn: sqlite3.Connection) -> None:
              WHERE rel NOT IN (SELECT rel FROM items WHERE is_dir=0)
         """)
     conn.commit()
+
+def last_modified(conn: sqlite3.Connection) -> float:
+    """Returns the MAX mtime of any item, used for HTTP Last-Modified header."""
+    row = conn.execute("SELECT MAX(mtime) FROM items").fetchone()
+    return float(row[0] or 0)
 
 # ----------------------------- Browsing ---------------------------------------
 

@@ -2,15 +2,10 @@ import os
 from pathlib import Path
 
 def _parse_bool(name: str, default: bool) -> bool:
-    """
-    Parse boolean environment variable with consistent logic.
+    """Parse a boolean from environment variable.
 
-    Args:
-        name: Environment variable name
-        default: Default value if variable is not set
-
-    Returns:
-        True if the env var matches "1", "true", "yes", or "on" (case-insensitive); otherwise default
+    Accepts: "1", "true", "yes", "on" (case-insensitive) as True.
+    All other values are False. If variable is not set, use default.
     """
     val = os.environ.get(name)
     if val is None:
@@ -29,10 +24,17 @@ if URL_PREFIX == "/":
     URL_PREFIX = ""
 
 ENABLE_WATCH = _parse_bool("ENABLE_WATCH", True)
-PRECACHE_THUMBS = _parse_bool("PRECACHE_THUMBS", False)
+PRECACHE_THUMBS = os.getenv("PRECACHE_THUMBS", "false").strip().lower() not in ("0","false","no","off")
 THUMB_WORKERS = max(1, int(os.getenv("THUMB_WORKERS", "2")))
-PRECACHE_ON_START = _parse_bool("PRECACHE_ON_START", False)
-AUTO_INDEX_ON_START = _parse_bool("AUTO_INDEX_ON_START", True)
+PRECACHE_ON_START = os.getenv("PRECACHE_ON_START", "false").strip().lower() in ("1","true","yes")
+AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() not in ("0","false","no","off")
 
 # Default trusted proxy subnets are standard private boundaries.
 TRUSTED_PROXIES_STR = os.getenv("TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
+
+# Page cache configuration
+PAGE_CACHE_DIR = Path(os.environ.get("PAGE_CACHE_DIR", "/data/pages"))
+PAGE_CACHE_TTL_DAYS = int(os.environ.get("PAGE_CACHE_TTL_DAYS", "14"))
+PAGE_CACHE_MAX_BYTES = int(os.environ.get("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))
+PAGE_CACHE_AUTOCLEAN = _parse_bool("PAGE_CACHE_AUTOCLEAN", True)
+PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.environ.get("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360"))

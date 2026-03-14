@@ -56,33 +56,12 @@ def _list_image_entries(zf: zipfile.ZipFile) -> list[str]:
     return [n for n in zf.namelist() if Path(n).suffix.lower() in valid and not n.endswith("/")]
 
 def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """
-    Check if a thumbnail exists for the given relative path.
-
-    Args:
-        rel: Relative path to CBZ file
-        comicvine_issue: Optional ComicVine issue ID for stable naming
-
-    Returns:
-        Path to thumbnail file if it exists, None otherwise
-    """
+    """Check if thumbnail already exists on disk, return path if found."""
     p = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
     return p if p.exists() else None
 
 def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
-    """
-    Convert an image to RGB JPEG and save it to disk.
-
-    Converts non-RGB images to RGB (including grayscale), resizes if larger than 1200px,
-    and saves as optimized JPEG with quality 88.
-
-    Args:
-        src_img: PIL Image object
-        dest: Destination Path for JPEG file
-
-    Returns:
-        Path to saved JPEG file
-    """
+    """Save image as JPEG, converting to RGB if needed and resizing if oversized."""
     im = src_img
     if im.mode != "RGB":
         im = im.convert("RGB")
@@ -102,20 +81,10 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     return dest
 
 def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """
-    Generate and cache a thumbnail from the first/best cover image in a CBZ file.
+    """Generate and cache thumbnail from CBZ cover image.
 
-    Extracts the cover image from the CBZ archive, converts it to RGB JPEG, resizes if needed
-    (max 1200px), and saves to /data/thumbs/. Returns immediately if thumbnail already exists.
-    Logs any errors to /data/thumbs_errors.log.
-
-    Args:
-        rel: Relative path to CBZ file (used for logging and as DB key)
-        abs_cbz_path: Absolute filesystem path to CBZ file
-        comicvine_issue: Optional ComicVine issue ID for stable thumbnail naming
-
-    Returns:
-        Path to generated thumbnail file if successful, None if CBZ missing or image extraction failed
+    Returns the thumbnail path if successful, None on any error.
+    Logs errors to /data/thumbs_errors.log via _log_thumb_error().
     """
     out = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
 
@@ -167,8 +136,7 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str])
         return None
 
 def ensure_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """
-    Ensure a thumb exists (lazy). Uses LIBRARY_DIR and rel to find the CBZ.
+    """Ensure thumbnail exists for item, generating it if necessary.
     """
     existing = have_thumb(rel, comicvine_issue)
     if existing:

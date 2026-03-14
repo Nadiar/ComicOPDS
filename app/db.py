@@ -1,7 +1,6 @@
 # app/db.py
 from __future__ import annotations
 
-import bcrypt
 import re
 import sqlite3
 from pathlib import Path
@@ -12,24 +11,11 @@ DB_PATH = Path("/data/library.db")
 HAS_FTS5: bool = False
 
 def has_fts5() -> bool:
-    """
-    Check if FTS5 (full-text search) is available.
-
-    Returns:
-        True if SQLite was compiled with FTS5 support and initialization succeeded
-    """
+    """Check if SQLite FTS5 extension is available."""
     return HAS_FTS5
 
 def connect() -> sqlite3.Connection:
-    """
-    Create and initialize database connection with pragmas and schema.
-
-    Creates or validates schema on first connection. Sets pragmas for WAL mode,
-    synchronous writes, memory temp store, and cache size.
-
-    Returns:
-        Connected sqlite3.Connection with row factory set to sqlite3.Row
-    """
+    """Create and return a new SQLite database connection with schema initialization."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try: conn.execute("PRAGMA journal_mode=WAL;")
@@ -93,10 +79,6 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "meta", "format"):
         _add_column(conn, "meta", "format", "TEXT")
 
-    # migration: ensure 'page_count' column exists
-    if not _column_exists(conn, "items", "page_count"):
-        _add_column(conn, "items", "page_count", "INTEGER")
-
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_isdir    ON items(is_dir)")
@@ -128,34 +110,36 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     """)
 
-def ensure_admin_user(username: str, password: str) -> None:
-    """
-    Ensure admin user with id=1 exists in database, creating it if missing.
-
-    Only creates the user if id=1 doesn't exist. Does nothing if admin user already exists.
+def seed_admin_user(username: str, password: str) -> None:
+    """Seed the default admin user (ID=1) if it doesn't exist.
 
     Args:
-        username: Admin username
-        password: Admin password (will be bcrypt hashed)
+        username: Admin username from environment
+        password: Admin password from environment (plaintext, will be hashed)
     """
+    import bcrypt
+
     conn = connect()
     try:
-        row = conn.execute("SELECT * FROM users WHERE id=1").fetchone()
-        if row:
-            return
-        hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-        conn.execute(
-            "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
-            (1, username, hashed, 1)
-        )
-        conn.commit()
+        admin_exists = conn.execute("SELECT 1 FROM users WHERE id=1").fetchone()
+        if not admin_exists:
+            hashed = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            conn.execute(
+                "INSERT INTO users (id, username, password_hash, is_admin) VALUES (?, ?, ?, ?)",
+                (1, username, hashed, 1)
+            )
+            conn.commit()
     finally:
         conn.close()
 
 # ----------------------------- Scan lifecycle ---------------------------------
 
-def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, float]:
-    """Returns a dictionary of all current rel paths and their mtimes in the DB."""
+def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, tuple[float, int]]:
+    """Get all current items with their modification times and sizes.
+
+    Returns:
+        Dictionary mapping rel paths to (mtime, size) tuples for incremental scan comparison.
+    """
     rows = conn.execute("SELECT rel, mtime, size FROM items").fetchall()
     # Add a fractional size check to the dictionary payload to ensure it covers both metadata cache changes
     return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0)) for r in rows}
@@ -165,7 +149,15 @@ def begin_scan(conn: sqlite3.Connection) -> None:
     pass
 
 def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> int:
-    """Removes any rows in the database that are no longer present on disk."""
+    """Remove items from database that are no longer present on disk.
+
+    Args:
+        conn: SQLite connection
+        current_rels: Set of rel paths that currently exist on filesystem
+
+    Returns:
+        Number of items removed from database.
+    """
     rows = conn.execute("SELECT rel FROM items").fetchall()
     db_rels = {r["rel"] for r in rows}
     
@@ -185,6 +177,7 @@ def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> i
     return len(missing)
 
 def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime: float) -> None:
+    """Insert or update a directory entry in the database."""
     conn.execute(
         """
         INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
@@ -198,24 +191,25 @@ def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime
         (rel, name, parent, mtime),
     )
 
-def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str, page_count: int = 0) -> None:
+def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str) -> None:
+    """Insert or update a file entry in the database."""
     conn.execute(
         """
-        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext, page_count)
-        VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(rel) DO UPDATE SET
           name=excluded.name,
           parent=excluded.parent,
           is_dir=excluded.is_dir,
           size=excluded.size,
           mtime=excluded.mtime,
-          ext=excluded.ext,
-          page_count=excluded.page_count
+          ext=excluded.ext
         """,
-        (rel, name, parent, size, mtime, ext, page_count),
+        (rel, name, parent, size, mtime, ext),
     )
 
 def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:
+    """Insert or update comic metadata (from ComicInfo.xml) for an item."""
     cols = [
         "title","series","number","volume","year","month","day",
         "writer","publisher","summary","genre","tags","characters",
@@ -275,11 +269,6 @@ def prune_stale(conn: sqlite3.Connection) -> None:
         """)
     conn.commit()
 
-def last_modified(conn: sqlite3.Connection) -> float:
-    """Returns the MAX mtime of any item, used for HTTP Last-Modified header."""
-    row = conn.execute("SELECT MAX(mtime) FROM items").fetchone()
-    return float(row[0] or 0)
-
 # ----------------------------- Browsing ---------------------------------------
 
 def children_count(conn: sqlite3.Connection, path: str) -> int:
@@ -324,6 +313,7 @@ def _like_term(s: str) -> str:
     return f"%{s}%"
 
 def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
+    """Execute full-text search query against indexed content."""
     words, years = _split_query(q)
     params: List[Any] = []
     where: List[str] = ["i.is_dir=0"]
@@ -365,6 +355,7 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
     return conn.execute(sql, params).fetchall()
 
 def search_count(conn: sqlite3.Connection, q: str) -> int:
+    """Get total count of full-text search results."""
     words, years = _split_query(q)
     params: List[Any] = []
     where: List[str] = ["i.is_dir=0"]
@@ -589,7 +580,7 @@ def _order_by_for_sort(sort: str) -> str:
 
 # ---- Smartlist runners --------------------------------------------------------
 
-def smartlist_query(
+def smartlist_query(  # pylint: disable=too-many-branches
     conn: sqlite3.Connection,
     groups: List[Dict[str, Any]],
     sort: str,
@@ -597,6 +588,7 @@ def smartlist_query(
     offset: int,
     distinct_by_series: Any
 ):
+    """Execute smart list query with filtering and pagination."""
     where, params = build_smartlist_where(groups)
     order_clause = _order_by_for_sort(sort)
 
@@ -660,6 +652,7 @@ def smartlist_query(
     return conn.execute(sql, (*params, *fts_params, limit, offset)).fetchall()
 
 def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> int:
+    """Get total count of items matching smart list filters."""
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     row = conn.execute(f"""
@@ -673,6 +666,7 @@ def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> i
 # ----------------------------- Stats ------------------------------------------
 
 def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Get library statistics (item counts, storage size, etc.)."""
     out: Dict[str, Any] = {}
 
     out["total_comics"] = conn.execute(

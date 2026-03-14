@@ -635,6 +635,7 @@ def _entry_json_from_row(row) -> dict:
 
 def _feed_json(rows: list, title: str, self_href: str,
           next_href: Optional[str] = None,
+          prev_href: Optional[str] = None,
           os_total: Optional[int] = None,
           os_start: Optional[int] = None,
           os_items: Optional[int] = None,
@@ -658,9 +659,15 @@ def _feed_json(rows: list, title: str, self_href: str,
     
     if os_total is not None:
         feed["metadata"]["numberOfItems"] = os_total
-    
+
+    if os_items is not None:
+        feed["metadata"]["itemsPerPage"] = os_items
+
     if next_href:
         feed["links"].append({"rel": "next", "href": f"{base}{_abs_url(next_href)}", "type": "application/opds+json"})
+
+    if prev_href:
+        feed["links"].append({"rel": "previous", "href": f"{base}{_abs_url(prev_href)}", "type": "application/opds+json"})
         
     for r in rows:
         if isinstance(r, dict) and 'is_smart' in r:
@@ -697,6 +704,7 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
     is_opds2 = _prefers_opds2(request)
     self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
     next_href = f"/opds?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
+    prev_href = f"/opds?path={quote(path)}&page={page-1}" if page > 1 else None
 
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
@@ -713,7 +721,11 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             row_dicts,
             title=f"/{path}" if path else "Library",
             self_href=self_href,
-            next_href=next_href
+            next_href=next_href,
+            prev_href=prev_href,
+            os_total=total,
+            os_start=start + 1 if total > 0 else 0,
+            os_items=PAGE_SIZE
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
@@ -771,6 +783,7 @@ def opds_search(request: Request,
     cache_hdrs = _opds_cache_headers(last_mod)
     self_href = f"/opds/search?query={quote(term)}&page={pg}"
     next_href = f"/opds/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
+    prev_href = f"/opds/search?query={quote(term)}&page={pg-1}" if pg > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
@@ -780,6 +793,7 @@ def opds_search(request: Request,
             title=f"Search: {term}",
             self_href=self_href,
             next_href=next_href,
+            prev_href=prev_href,
             os_total=total,
             os_start=offset + 1 if total > 0 else 0,
             os_items=items,
@@ -1297,11 +1311,21 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     next_href = None
     if (start + len(rows)) < total_for_nav:
         next_href = f"/opds/smart/{quote(slug)}?page={page+1}"
+    prev_href = f"/opds/smart/{quote(slug)}?page={page-1}" if page > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
-        feed_dict = _feed_json(row_dicts, title=sl["name"], self_href=self_href, next_href=next_href)
+        feed_dict = _feed_json(
+            row_dicts,
+            title=sl["name"],
+            self_href=self_href,
+            next_href=next_href,
+            prev_href=prev_href,
+            os_total=total_for_nav,
+            os_start=start + 1 if total_for_nav > 0 else 0,
+            os_items=PAGE_SIZE
+        )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]

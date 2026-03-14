@@ -1,11 +1,13 @@
 # app/thumbs.py
 from __future__ import annotations
 
-import logging, warnings
+import hashlib
+import logging
+import warnings
+import zipfile
 from pathlib import Path
 from typing import Optional
-import hashlib
-import zipfile
+
 from PIL import Image, UnidentifiedImageError
 
 from .config import LIBRARY_DIR
@@ -54,14 +56,14 @@ def _list_image_entries(zf: zipfile.ZipFile) -> list[str]:
     return [n for n in zf.namelist() if Path(n).suffix.lower() in valid and not n.endswith("/")]
 
 def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
+    """Check if thumbnail already exists on disk, return path if found."""
     p = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
     return p if p.exists() else None
 
 def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
+    """Save image as JPEG, converting to RGB if needed and resizing if oversized."""
     im = src_img
-    if im.mode not in ("RGB", "L"):
-        im = im.convert("RGB")
-    elif im.mode == "L":
+    if im.mode != "RGB":
         im = im.convert("RGB")
     dest.parent.mkdir(parents=True, exist_ok=True)
     # reasonable default size/quality; tweak if you wish
@@ -79,8 +81,9 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     return dest
 
 def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """
-    Create the thumbnail if missing. Returns the path if it exists afterwards.
+    """Generate and cache thumbnail from CBZ cover image.
+
+    Returns the thumbnail path if successful, None on any error.
     Logs errors to /data/thumbs_errors.log via _log_thumb_error().
     """
     out = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
@@ -133,8 +136,7 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str])
         return None
 
 def ensure_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """
-    Ensure a thumb exists (lazy). Uses LIBRARY_DIR and rel to find the CBZ.
+    """Ensure thumbnail exists for item, generating it if necessary.
     """
     existing = have_thumb(rel, comicvine_issue)
     if existing:

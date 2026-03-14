@@ -1,11 +1,16 @@
 import os
 from pathlib import Path
 
-def _env_bool(name: str, default: bool) -> bool:
+def _parse_bool(name: str, default: bool) -> bool:
+    """Parse a boolean from environment variable.
+
+    Accepts: "1", "true", "yes", "on" (case-insensitive) as True.
+    All other values are False. If variable is not set, use default.
+    """
     val = os.environ.get(name)
     if val is None:
         return default
-    return val.strip().lower() in ("true", "yes", "on")
+    return val.strip().lower() in ("1", "true", "yes", "on")
 
 LIBRARY_DIR = Path(os.environ.get("CONTENT_BASE_DIR", "/library")).resolve()
 PAGE_SIZE = int(os.environ.get("PAGE_SIZE", "50"))
@@ -18,7 +23,7 @@ URL_PREFIX = os.environ.get("URL_PREFIX", "").rstrip("/")
 if URL_PREFIX == "/":
     URL_PREFIX = ""
 
-ENABLE_WATCH = _env_bool("ENABLE_WATCH", True)
+ENABLE_WATCH = _parse_bool("ENABLE_WATCH", True)
 PRECACHE_THUMBS = os.getenv("PRECACHE_THUMBS", "false").strip().lower() not in ("0","false","no","off")
 THUMB_WORKERS = max(1, int(os.getenv("THUMB_WORKERS", "2")))
 PRECACHE_ON_START = os.getenv("PRECACHE_ON_START", "false").strip().lower() in ("1","true","yes")
@@ -26,3 +31,10 @@ AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() 
 
 # Default trusted proxy subnets are standard private boundaries.
 TRUSTED_PROXIES_STR = os.getenv("TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
+
+# Page cache configuration
+PAGE_CACHE_DIR = Path(os.environ.get("PAGE_CACHE_DIR", "/data/pages"))
+PAGE_CACHE_TTL_DAYS = int(os.environ.get("PAGE_CACHE_TTL_DAYS", "14"))
+PAGE_CACHE_MAX_BYTES = int(os.environ.get("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))
+PAGE_CACHE_AUTOCLEAN = _parse_bool("PAGE_CACHE_AUTOCLEAN", True)
+PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.environ.get("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360"))

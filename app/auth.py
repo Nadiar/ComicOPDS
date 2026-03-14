@@ -1,20 +1,22 @@
 # app/auth.py
-from fastapi import Security, HTTPException, status, Request, Depends
+import ipaddress
+import logging
+import os
+import secrets
+from typing import Optional
+
+import bcrypt
+from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-import os, secrets, logging, ipaddress
+
+from . import db
+from .config import TRUSTED_PROXIES_STR, _parse_bool
 
 log = logging.getLogger("comicopds.auth")
 
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-DISABLE_AUTH = _truthy(os.getenv("DISABLE_AUTH"))
+DISABLE_AUTH = _parse_bool("DISABLE_AUTH", False)
 USER = os.getenv("OPDS_BASIC_USER", "admin")
 PASS = os.getenv("OPDS_BASIC_PASS", "change-me")
-
-from .config import TRUSTED_PROXIES_STR
-from . import db
-import bcrypt
 
 security = HTTPBasic()
 
@@ -49,7 +51,11 @@ def get_real_client_ip(request: Request) -> str:
             
     return client_host
 
-def authenticate_user(credentials: HTTPBasicCredentials) -> dict:
+def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
+    """Authenticate user by username and password.
+
+    Checks environment variables first, then database. Returns user dict on success, None on failure.
+    """
     supplied_user = credentials.username.encode("utf8")
     supplied_pass = credentials.password.encode("utf8")
     
@@ -80,8 +86,12 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> dict:
     return None
 
 def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """FastAPI dependency to require basic HTTP authentication.
+
+    Returns username on success, raises HTTPException on authentication failure.
+    """
     # Optional IP logging can be done here using get_real_client_ip(request)
-    
+
     if DISABLE_AUTH:
         return "anonymous"
 
@@ -95,6 +105,10 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
     return user["username"]
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """FastAPI dependency to require admin-level HTTP authentication.
+
+    Returns username on success, raises HTTPException if user is not admin.
+    """
     if DISABLE_AUTH:
         return "anonymous"
 

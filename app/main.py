@@ -1,32 +1,36 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
-from fastapi.responses import (
-    StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
-)
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote
-import threading
-import time
+import hashlib
+import json
+import logging
 import os
 import re
-import json
-import zipfile
-import hashlib
-from PIL import Image
 import sys
-import logging
+import threading
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START
-from .opds import now_rfc3339, mime_for
-from .auth import require_basic
-from . import auth
-from .thumbs import have_thumb, generate_thumb
-from . import db  # SQLite adapter
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse,
+)
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from PIL import Image
+
+from . import auth, db
+from .config import (
+    AUTO_INDEX_ON_START, LIBRARY_DIR, PAGE_CACHE_AUTOCLEAN,
+    PAGE_CACHE_CLEAN_INTERVAL_MIN, PAGE_CACHE_DIR, PAGE_CACHE_MAX_BYTES,
+    PAGE_CACHE_TTL_DAYS, PAGE_SIZE, PRECACHE_ON_START, PRECACHE_THUMBS,
+    SERVER_BASE, THUMB_WORKERS, URL_PREFIX,
+)
+from .opds import mime_for, now_rfc3339
+from .thumbs import generate_thumb, have_thumb
 
 # -------------------- Logging --------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
@@ -38,16 +42,6 @@ _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(m
 app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
-
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-PAGE_CACHE_DIR = Path("/data/pages")  
-PAGE_CACHE_TTL_DAYS = int(os.getenv("PAGE_CACHE_TTL_DAYS", "14"))         # delete book caches idle > 14 days
-PAGE_CACHE_MAX_BYTES = int(os.getenv("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))  # 10 GiB cap by default
-PAGE_CACHE_AUTOCLEAN = _truthy(os.getenv("PAGE_CACHE_AUTOCLEAN", "true")) # run background cleaner
-PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.getenv("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360")) # every 6h
-
 
 def _mask_headers(h: dict) -> dict:
     masked = {}
@@ -119,7 +113,8 @@ def _abs_url(p: str) -> str:
     return (URL_PREFIX + p) if URL_PREFIX else p
 
 def _set_status(**kw):
-    _INDEX_STATUS.update(kw)
+    with _INDEX_LOCK:
+        _INDEX_STATUS.update(kw)
 
 if __name__ == "__main__":
     import uvicorn
@@ -185,8 +180,9 @@ def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
     return meta
 
 def _index_progress(rel: str):
-    _INDEX_STATUS["done"] += 1
-    _INDEX_STATUS["current"] = rel
+    with _INDEX_LOCK:
+        _INDEX_STATUS["done"] += 1
+        _INDEX_STATUS["current"] = rel
 
 def _run_scan():
     """Background scanner: writes into SQLite using its own connection."""
@@ -320,18 +316,12 @@ def _run_precache_thumbs(workers: int):
 
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
-@app.post("/admin/reindex")
-def trigger_reindex(_=Depends(auth.require_admin)):
-    """Trigger the background scanner to perform an incremental update."""
-    if _INDEX_STATUS["running"]:
-        return {"status": "already_running"}
-        
-    threading.Thread(target=_run_scan, daemon=True).start()
-    return {"status": "started"}
 
 def _start_scan(force=False):
-    if not force and _INDEX_STATUS["running"]:
-        return
+    with _INDEX_LOCK:
+        if not force and _INDEX_STATUS["running"]:
+            return
+        _INDEX_STATUS["running"] = True
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
@@ -353,6 +343,9 @@ def startup():
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
 
+    # Seed the default admin user if needed
+    db.seed_admin_user(auth.USER, auth.PASS)
+
     # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:
         t = threading.Thread(target=_autoclean_loop, daemon=True)
@@ -364,7 +357,11 @@ def startup():
         _start_scan(force=True)
         return
     # Run thumbnails pre-cache at startup even if no scan runs
-    if PRECACHE_ON_START and not _INDEX_STATUS["running"] and not _THUMB_STATUS["running"]:
+    with _INDEX_LOCK:
+        index_running = _INDEX_STATUS["running"]
+    with _THUMB_LOCK:
+        thumb_running = _THUMB_STATUS["running"]
+    if PRECACHE_ON_START and not index_running and not thumb_running:
         t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
         t.start()
 
@@ -380,7 +377,6 @@ def startup():
         _set_status(running=False, phase="idle", total=0, done=0, current="", ended_at=time.time())
 
 # -------------------- PSE (Page Streaming) helpers --------------------
-PAGE_CACHE_DIR = Path("/data/pages")
 VALID_PAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
 
 def _cbz_list_pages(cbz_path: Path) -> list[str]:
@@ -1119,8 +1115,8 @@ class UserCreate(BaseModel):
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
-    password: str = None
-    is_admin: bool = None
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
 
 @app.get("/api/users")
 def list_users(_=Depends(auth.require_admin)):
@@ -1190,18 +1186,9 @@ def delete_user(user_id: int, _=Depends(auth.require_admin)):
 # Image Serving
 # ------------------------------------------------------------------------------
 
-    thumbs_dir = Path("/data/thumbs")
-    total_covers = 0
-    if thumbs_dir.exists():
-        total_covers = sum(1 for _ in thumbs_dir.glob("*.jpg"))
-    payload = db.stats(conn)
-    payload["total_covers"] = total_covers
-
-    return JSONResponse(payload)
-
 # -------------------- Debug --------------------
 @app.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = ""):
+def debug_children(path: str = "", _=Depends(auth.require_admin)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -1377,24 +1364,29 @@ def index_status(_=Depends(require_basic)):
         usable = conn.execute("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)").fetchone()[0] == 1
     finally:
         conn.close()
-    return JSONResponse({**_INDEX_STATUS, "usable": usable})
+    with _INDEX_LOCK:
+        status = _INDEX_STATUS.copy()
+    return JSONResponse({**status, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(_=Depends(require_basic)):
+def admin_reindex(_=Depends(auth.require_admin)):
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
-def admin_thumbs_precache(_=Depends(require_basic)):
-    if _THUMB_STATUS["running"]:
-        return JSONResponse({"ok": True, "started": False, "reason": "already running"})
+def admin_thumbs_precache(_=Depends(auth.require_admin)):
+    with _THUMB_LOCK:
+        if _THUMB_STATUS["running"]:
+            return JSONResponse({"ok": True, "started": False, "reason": "already running"})
     t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
     t.start()
     return JSONResponse({"ok": True, "started": True})
 
 @app.get("/thumbs/status", response_class=JSONResponse)
 def thumbs_status(_=Depends(require_basic)):
-    return JSONResponse(_THUMB_STATUS)
+    with _THUMB_LOCK:
+        status = _THUMB_STATUS.copy()
+    return JSONResponse(status)
 
 # -------------------- Thumbs Errors --------------------
 

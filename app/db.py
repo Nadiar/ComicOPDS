@@ -134,7 +134,7 @@ def seed_admin_user(username: str, password: str) -> None:
 
 # ----------------------------- Scan lifecycle ---------------------------------
 
-def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, float]:
+def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, tuple[float, int]]:
     """Get all current items with their modification times and sizes.
 
     Returns:

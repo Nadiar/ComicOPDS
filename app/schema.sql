@@ -12,7 +12,7 @@ CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent);
 CREATE INDEX IF NOT EXISTS idx_items_name   ON items(name);
 CREATE INDEX IF NOT EXISTS idx_items_isdir  ON items(is_dir);
 
--- ComicInfo metadata (with runtime-added 'format' column via migration)
+-- ComicInfo metadata
 CREATE TABLE IF NOT EXISTS meta (
   rel            TEXT PRIMARY KEY,
   title          TEXT,
@@ -41,6 +41,7 @@ CREATE INDEX IF NOT EXISTS idx_meta_publisher ON meta(publisher);
 CREATE INDEX IF NOT EXISTS idx_meta_format    ON meta(format);
 
 -- Full-text search table (FTS5 with unicode61 tokenizer)
+-- Note: Requires SQLite compiled with FTS5 support; safe to skip if unavailable
 CREATE VIRTUAL TABLE IF NOT EXISTS fts
 USING fts5(
   rel UNINDEXED,

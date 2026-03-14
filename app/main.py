@@ -321,6 +321,7 @@ def _start_scan(force=False):
     with _INDEX_LOCK:
         if not force and _INDEX_STATUS["running"]:
             return
+        _INDEX_STATUS["running"] = True
     t = threading.Thread(target=_run_scan, daemon=True)
     t.start()
 
@@ -1373,7 +1374,7 @@ def admin_reindex(_=Depends(auth.require_admin)):
     return JSONResponse({"ok": True, "started": True})
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
-def admin_thumbs_precache(_=Depends(require_basic)):
+def admin_thumbs_precache(_=Depends(auth.require_admin)):
     with _THUMB_LOCK:
         if _THUMB_STATUS["running"]:
             return JSONResponse({"ok": True, "started": False, "reason": "already running"})

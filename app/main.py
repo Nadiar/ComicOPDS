@@ -183,12 +183,15 @@ def _index_progress(rel: str):
 
 def _run_scan():
     """Background scanner: writes into SQLite using its own connection."""
+    app_logger.info(f"Starting filesystem scan of {LIBRARY_DIR}")
     conn = db.connect()
     try:
         db.begin_scan(conn)
         _set_status(running=True, phase="counting", done=0, total=0, current="", started_at=time.time(), ended_at=0.0)
 
+        app_logger.info("Counting CBZ files...")
         total = _count_cbz(LIBRARY_DIR)
+        app_logger.info(f"Found {total} CBZ files, beginning index")
         _set_status(total=total, phase="indexing")
         
         existing_items = db.get_existing_items_mtime(conn)
@@ -253,17 +256,22 @@ def _run_scan():
 
         if _uncommitted:
             conn.commit()
+
+        app_logger.info("Cleaning up deleted items...")
         db.cleanup_deleted_items(conn, current_rels)
         db.prune_stale(conn)
 
         # after scanning and pruning
         if PRECACHE_THUMBS:
+            app_logger.info("Pre-caching thumbnails...")
             _set_status(phase="thumbnails")
             _run_precache_thumbs(THUMB_WORKERS)
 
-        _set_status(phase="idle", running=False, ended_at=time.time(), current="")
+        scan_end = time.time()
+        app_logger.info(f"Scan completed successfully in {scan_end - _INDEX_STATUS.get('started_at', scan_end):.2f}s")
+        _set_status(phase="idle", running=False, ended_at=scan_end, current="")
     except Exception as e:
-        app_logger.error(f"scan error: {e}")
+        app_logger.error(f"scan error: {e}", exc_info=True)
         _set_status(phase="idle", running=False, ended_at=time.time())
     finally:
         try:

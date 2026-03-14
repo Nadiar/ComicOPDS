@@ -26,3 +26,10 @@ AUTO_INDEX_ON_START = os.getenv("AUTO_INDEX_ON_START", "false").strip().lower() 
 
 # Default trusted proxy subnets are standard private boundaries.
 TRUSTED_PROXIES_STR = os.getenv("TRUSTED_PROXIES", "10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16")
+
+# Page cache configuration
+PAGE_CACHE_DIR = Path(os.environ.get("PAGE_CACHE_DIR", "/data/pages"))
+PAGE_CACHE_TTL_DAYS = int(os.environ.get("PAGE_CACHE_TTL_DAYS", "14"))
+PAGE_CACHE_MAX_BYTES = int(os.environ.get("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))
+PAGE_CACHE_AUTOCLEAN = _env_bool("PAGE_CACHE_AUTOCLEAN", True)
+PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.environ.get("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360"))

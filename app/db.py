@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -298,6 +299,13 @@ def get_item(conn: sqlite3.Connection, rel: str):
         LEFT JOIN meta m ON m.rel = i.rel
         WHERE i.rel=?
     """, (rel,)).fetchone()
+
+def last_modified(conn: sqlite3.Connection) -> float:
+    """Get the timestamp of the most recently modified item in the database."""
+    result = conn.execute("SELECT MAX(mtime) FROM items").fetchone()
+    if result and result[0]:
+        return float(result[0])
+    return time.time()
 
 # ----------------------------- Search (FTS5 optional + year) ------------------
 

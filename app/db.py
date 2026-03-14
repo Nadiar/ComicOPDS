@@ -12,9 +12,24 @@ DB_PATH = Path("/data/library.db")
 HAS_FTS5: bool = False
 
 def has_fts5() -> bool:
+    """
+    Check if FTS5 (full-text search) is available.
+
+    Returns:
+        True if SQLite was compiled with FTS5 support and initialization succeeded
+    """
     return HAS_FTS5
 
 def connect() -> sqlite3.Connection:
+    """
+    Create and initialize database connection with pragmas and schema.
+
+    Creates or validates schema on first connection. Sets pragmas for WAL mode,
+    synchronous writes, memory temp store, and cache size.
+
+    Returns:
+        Connected sqlite3.Connection with row factory set to sqlite3.Row
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try: conn.execute("PRAGMA journal_mode=WAL;")
@@ -114,7 +129,15 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     """)
 
 def ensure_admin_user(username: str, password: str) -> None:
-    """Ensure admin user exists in database."""
+    """
+    Ensure admin user with id=1 exists in database, creating it if missing.
+
+    Only creates the user if id=1 doesn't exist. Does nothing if admin user already exists.
+
+    Args:
+        username: Admin username
+        password: Admin password (will be bcrypt hashed)
+    """
     conn = connect()
     try:
         row = conn.execute("SELECT * FROM users WHERE id=1").fetchone()

@@ -26,9 +26,20 @@ except ValueError:
     TRUSTED_NETWORKS = []
 
 def get_real_client_ip(request: Request) -> str:
-    """Check if the requesting client is a trusted proxy, and if so, return the forwarded IP."""
+    """
+    Get the real client IP address, respecting trusted proxy headers.
+
+    If the direct client IP is in TRUSTED_NETWORKS, returns the IP from X-Forwarded-For
+    or X-Real-IP headers. Otherwise returns the direct client IP.
+
+    Args:
+        request: FastAPI Request object
+
+    Returns:
+        Client IP address string
+    """
     client_host = request.client.host if request.client else "127.0.0.1"
-    
+
     # Is the direct client in our trusted networks?
     is_trusted = False
     try:
@@ -36,18 +47,18 @@ def get_real_client_ip(request: Request) -> str:
         is_trusted = any(client_ip in net for net in TRUSTED_NETWORKS)
     except ValueError:
         pass
-        
+
     if is_trusted:
         # Trust the proxy headers
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
             # X-Forwarded-For can be a comma separated list, the first is the real client
             return forwarded_for.split(",")[0].strip()
-        
+
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
             return real_ip.strip()
-            
+
     return client_host
 
 def authenticate_user(credentials: HTTPBasicCredentials) -> dict:
@@ -81,8 +92,24 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> dict:
     return None
 
 def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """
+    Dependency for HTTP Basic Auth on general endpoints.
+
+    Returns the authenticated username if auth is valid, or raises HTTP 401.
+    Returns "anonymous" if DISABLE_AUTH is true.
+
+    Args:
+        request: FastAPI Request object
+        credentials: HTTP Basic credentials from header
+
+    Returns:
+        Username string
+
+    Raises:
+        HTTPException: 401 Unauthorized if credentials are invalid
+    """
     # Optional IP logging can be done here using get_real_client_ip(request)
-    
+
     if DISABLE_AUTH:
         return "anonymous"
 
@@ -96,6 +123,22 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
     return user["username"]
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """
+    Dependency for HTTP Basic Auth on admin-only endpoints.
+
+    Returns the authenticated admin username if auth is valid and user is admin, or raises HTTP 401.
+    Returns "anonymous" if DISABLE_AUTH is true.
+
+    Args:
+        request: FastAPI Request object
+        credentials: HTTP Basic credentials from header
+
+    Returns:
+        Username string
+
+    Raises:
+        HTTPException: 401 Unauthorized if credentials are invalid or user lacks admin permissions
+    """
     if DISABLE_AUTH:
         return "anonymous"
 

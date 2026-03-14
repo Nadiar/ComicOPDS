@@ -2,7 +2,16 @@ import os
 from pathlib import Path
 
 def _parse_bool(name: str, default: bool) -> bool:
-    """Parse boolean environment variable with consistent logic."""
+    """
+    Parse boolean environment variable with consistent logic.
+
+    Args:
+        name: Environment variable name
+        default: Default value if variable is not set
+
+    Returns:
+        True if the env var matches "1", "true", "yes", or "on" (case-insensitive); otherwise default
+    """
     val = os.environ.get(name)
     if val is None:
         return default

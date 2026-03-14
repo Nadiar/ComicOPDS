@@ -3,7 +3,7 @@ from pathlib import Path
 
 MIME_MAP = { ".cbz": "application/vnd.comicbook+zip" }
 
-def now_rfc3339():
+def now_rfc3339() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 def mime_for(path: Path) -> str:

@@ -1,36 +1,36 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Query, HTTPException, Request, Response, Depends, Header
-from fastapi.responses import (
-    StreamingResponse, FileResponse, PlainTextResponse, HTMLResponse, JSONResponse
-)
-from pathlib import Path
-from typing import List, Dict, Any, Optional
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import quote
-import threading
-import time
+import hashlib
+import json
+import logging
 import os
 import re
-import json
-import zipfile
-import hashlib
-from PIL import Image
 import sys
-import logging
+import threading
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
-from .config import (
-    LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS,
-    PRECACHE_ON_START, AUTO_INDEX_ON_START, PAGE_CACHE_DIR, PAGE_CACHE_TTL_DAYS,
-    PAGE_CACHE_MAX_BYTES, PAGE_CACHE_AUTOCLEAN, PAGE_CACHE_CLEAN_INTERVAL_MIN
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse,
 )
-from .opds import now_rfc3339, mime_for
-from .auth import require_basic
-from . import auth
-from .thumbs import have_thumb, generate_thumb
-from . import db  # SQLite adapter
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from PIL import Image
+
+from . import auth, db
+from .config import (
+    AUTO_INDEX_ON_START, LIBRARY_DIR, PAGE_CACHE_AUTOCLEAN,
+    PAGE_CACHE_CLEAN_INTERVAL_MIN, PAGE_CACHE_DIR, PAGE_CACHE_MAX_BYTES,
+    PAGE_CACHE_TTL_DAYS, PAGE_SIZE, PRECACHE_ON_START, PRECACHE_THUMBS,
+    SERVER_BASE, THUMB_WORKERS, URL_PREFIX,
+)
+from .opds import mime_for, now_rfc3339
+from .thumbs import generate_thumb, have_thumb
 
 # -------------------- Logging --------------------
 LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
@@ -42,10 +42,6 @@ _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(m
 app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
-
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
 
 def _mask_headers(h: dict) -> dict:
     masked = {}

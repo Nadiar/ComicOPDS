@@ -1,21 +1,22 @@
 # app/auth.py
-from fastapi import Security, HTTPException, status, Request, Depends
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
+import ipaddress
+import logging
+import os
+import secrets
 from typing import Optional
-import os, secrets, logging, ipaddress
+
+import bcrypt
+from fastapi import Depends, HTTPException, Request, Security, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+from . import db
+from .config import TRUSTED_PROXIES_STR, _parse_bool
 
 log = logging.getLogger("comicopds.auth")
 
-def _truthy(v: str | None) -> bool:
-    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
-
-DISABLE_AUTH = _truthy(os.getenv("DISABLE_AUTH"))
+DISABLE_AUTH = _parse_bool("DISABLE_AUTH", False)
 USER = os.getenv("OPDS_BASIC_USER", "admin")
 PASS = os.getenv("OPDS_BASIC_PASS", "change-me")
-
-from .config import TRUSTED_PROXIES_STR
-from . import db
-import bcrypt
 
 security = HTTPBasic()
 

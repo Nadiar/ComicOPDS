@@ -140,7 +140,18 @@ def _parent_rel(rel: str) -> str:
     return "" if "/" not in rel else rel.rsplit("/", 1)[0]
 
 def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
-    """Lightweight ComicInfo.xml reader."""
+    """Read ComicInfo.xml metadata from a CBZ file.
+
+    Extracts metadata from the ComicInfo.xml file embedded in a CBZ archive.
+    Returns an empty dictionary if the XML file is not found or parsing fails.
+
+    Args:
+        cbz_path: Path to the CBZ file to read metadata from.
+
+    Returns:
+        Dictionary with lowercase tag names as keys and text values from ComicInfo.xml.
+        Returns empty dict if no ComicInfo.xml is found or if any error occurs.
+    """
     from xml.etree import ElementTree as ET
     meta: Dict[str, Any] = {}
     try:

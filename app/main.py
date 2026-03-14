@@ -25,12 +25,12 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from . import auth, db
 from .auth import require_basic
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START, _parse_bool
+from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX, PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START, ENABLE_WATCH, _parse_bool
 from .opds import now_rfc3339, mime_for
 from .thumbs import have_thumb, generate_thumb
 
 # -------------------- Logging --------------------
-LOG_LEVEL = os.getenv("LOG_LEVEL", "ERROR").upper()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 ERROR_LOG_PATH = Path("/data/thumbs_errors.log")
 app_logger = logging.getLogger("comicopds")
 app_logger.setLevel(LOG_LEVEL)
@@ -71,7 +71,7 @@ async def log_requests(request: Request, call_next):
         qp = dict(request.query_params)
         if qp:
             app_logger.info(f"    query: {qp}")
-        app_logger.info(f"    headers: {_mask_headers(dict(request.headers))}")
+        app_logger.debug(f"    headers: {_mask_headers(dict(request.headers))}")
     except Exception:
         pass
     resp = await call_next(request)
@@ -189,6 +189,8 @@ def _run_scan():
         db.begin_scan(conn)
         _set_status(running=True, phase="counting", done=0, total=0, current="", started_at=time.time(), ended_at=0.0)
 
+        scan_stats = {"new": 0, "updated": 0, "skipped": 0, "errors": 0}
+
         app_logger.info("Counting CBZ files...")
         total = _count_cbz(LIBRARY_DIR)
         app_logger.info(f"Found {total} CBZ files, beginning index")
@@ -224,11 +226,16 @@ def _run_scan():
                 
                 # Check for existing matching item
                 existing = existing_items.get(rel)
-                
+
                 if existing and existing[0] == float(mtime) and existing[1] == int(size):
                     # We have a matching file size & mtime, so skip the costly metadata parsing
+                    scan_stats["skipped"] += 1
                     _index_progress(rel)
                     continue
+                elif existing:
+                    scan_stats["updated"] += 1
+                else:
+                    scan_stats["new"] += 1
 
                 try:
                     page_count = len(_cbz_list_pages(p))
@@ -254,11 +261,18 @@ def _run_scan():
                     conn.commit()
                     _uncommitted = 0
 
+                processed = scan_stats["new"] + scan_stats["updated"] + scan_stats["skipped"]
+                if processed % 500 == 0:
+                    app_logger.debug("scan progress: %d processed (%d new, %d updated, %d skipped)",
+                                   processed, scan_stats["new"], scan_stats["updated"], scan_stats["skipped"])
+
         if _uncommitted:
             conn.commit()
 
         app_logger.info("Cleaning up deleted items...")
-        db.cleanup_deleted_items(conn, current_rels)
+        removed = db.cleanup_deleted_items(conn, current_rels)
+        if removed:
+            app_logger.info("Removed %d deleted items from database", removed)
         db.prune_stale(conn)
 
         # after scanning and pruning
@@ -268,7 +282,12 @@ def _run_scan():
             _run_precache_thumbs(THUMB_WORKERS)
 
         scan_end = time.time()
-        app_logger.info(f"Scan completed successfully in {scan_end - _INDEX_STATUS.get('started_at', scan_end):.2f}s")
+        app_logger.info(
+            "Scan completed in %.2fs: %d new, %d updated, %d skipped, %d errors",
+            scan_end - _INDEX_STATUS.get('started_at', scan_end),
+            scan_stats["new"], scan_stats["updated"],
+            scan_stats["skipped"], scan_stats["errors"]
+        )
         _set_status(phase="idle", running=False, ended_at=scan_end, current="")
     except Exception as e:
         app_logger.error(f"scan error: {e}", exc_info=True)
@@ -327,11 +346,12 @@ def _run_precache_thumbs(workers: int):
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
 @app.post("/admin/reindex")
-def trigger_reindex(_=Depends(auth.require_admin)):
+def trigger_reindex(admin: str = Depends(auth.require_admin)):
     """Trigger the background scanner to perform an incremental update."""
+    app_logger.info("admin: reindex triggered by=%s", admin)
     if _INDEX_STATUS["running"]:
         return {"status": "already_running"}
-        
+
     threading.Thread(target=_run_scan, daemon=True).start()
     return {"status": "started"}
 
@@ -361,6 +381,19 @@ def startup():
         conn.close()
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
+
+    app_logger.info("=== ComicOPDS Configuration ===")
+    app_logger.info(f"  Library dir: {LIBRARY_DIR}")
+    app_logger.info(f"  Server base: {SERVER_BASE}")
+    app_logger.info(f"  URL prefix: {URL_PREFIX or '(none)'}")
+    app_logger.info(f"  Page size: {PAGE_SIZE}")
+    app_logger.info(f"  Auth disabled: {auth.DISABLE_AUTH}")
+    app_logger.info(f"  Auto-index on start: {AUTO_INDEX_ON_START}")
+    app_logger.info(f"  Precache thumbs: {PRECACHE_THUMBS}")
+    app_logger.info(f"  Thumb workers: {THUMB_WORKERS}")
+    app_logger.info(f"  Watch enabled: {ENABLE_WATCH}")
+    app_logger.info(f"  Log level: {LOG_LEVEL}")
+    app_logger.info("===============================")
 
     # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:
@@ -838,7 +871,8 @@ def _common_file_headers(p: Path) -> dict:
     }
 
 @app.head("/download")
-def download_head(path: str, _=Depends(require_basic)):
+def download_head(path: str, user: str = Depends(require_basic)):
+    app_logger.debug("download HEAD: user=%s file=%s", user, path)
     p = _abspath(path)
     if not p.exists() or not p.is_file():
         raise HTTPException(404)
@@ -848,7 +882,8 @@ def download_head(path: str, _=Depends(require_basic)):
     return Response(status_code=200, headers=headers)
 
 @app.get("/download")
-def download(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
+def download(path: str, request: Request, range: str | None = Header(default=None), user: str = Depends(require_basic)):
+    app_logger.info("download: user=%s file=%s", user, path)
     p = _abspath(path)
     if not p.exists() or not p.is_file():
         raise HTTPException(404)
@@ -911,12 +946,14 @@ def download(path: str, request: Request, range: str | None = Header(default=Non
     return StreamingResponse(iter_file(p, start, end), status_code=206, headers=headers)
 
 @app.head("/stream")
-def stream_head(path: str, _=Depends(require_basic)):
-    return download_head(path)
+def stream_head(path: str, user: str = Depends(require_basic)):
+    app_logger.debug("stream HEAD: user=%s file=%s", user, path)
+    return download_head(path, user=user)
 
 @app.get("/stream")
-def stream(path: str, request: Request, range: str | None = Header(default=None), _=Depends(require_basic)):
-    return download(path=path, request=request, range=range)
+def stream(path: str, request: Request, range: str | None = Header(default=None), user: str = Depends(require_basic)):
+    app_logger.info("stream: user=%s file=%s", user, path)
+    return download(path=path, request=request, range=range, user=user)
 
 @app.get("/thumb")
 def thumb(path: str, _=Depends(require_basic)):
@@ -941,8 +978,9 @@ def thumb(path: str, _=Depends(require_basic)):
 
 # -------------------- PSE endpoints --------------------
 @app.get("/pse/stream", response_class=Response)
-def pse_stream(path: str = Query(..., description="Relative path to CBZ"), _=Depends(require_basic)):
+def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user: str = Depends(require_basic)):
     """Optional: Atom feed per-pages (kept for compatibility)."""
+    app_logger.info("pse_stream: user=%s file=%s", user, path)
     abs_cbz = _abspath(path)
     if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
         raise HTTPException(404, "Book not found")
@@ -974,8 +1012,9 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), _=Dep
     return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
 
 @app.get("/pse/page")
-def pse_page(path: str = Query(...), page: int = Query(0, ge=0), _=Depends(require_basic)):
+def pse_page(path: str = Query(...), page: int = Query(0, ge=0), user: str = Depends(require_basic)):
     """Serve page by ZERO-BASED index to match Panels (0 == first page)."""
+    app_logger.debug("pse_page: user=%s file=%s page=%d", user, path, page)
     abs_cbz = _abspath(path)
     if not abs_cbz.exists() or not abs_cbz.is_file():
         raise HTTPException(404, "Book not found")
@@ -1140,7 +1179,8 @@ class UserUpdate(BaseModel):
     is_admin: bool = None
 
 @app.get("/api/users")
-def list_users(_=Depends(auth.require_admin)):
+def list_users(admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: list users by=%s", admin)
     conn = db.connect()
     try:
         rows = conn.execute("SELECT id, username, is_admin FROM users").fetchall()
@@ -1149,8 +1189,9 @@ def list_users(_=Depends(auth.require_admin)):
         conn.close()
 
 @app.post("/api/users")
-def create_user(user: UserCreate, _=Depends(auth.require_admin)):
+def create_user(user: UserCreate, admin: str = Depends(auth.require_admin)):
     import bcrypt
+    app_logger.info("admin: user created username=%s by=%s", user.username, admin)
     conn = db.connect()
     try:
         hashed = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -1166,8 +1207,9 @@ def create_user(user: UserCreate, _=Depends(auth.require_admin)):
         conn.close()
 
 @app.put("/api/users/{user_id}")
-def update_user(user_id: int, user: UserUpdate, _=Depends(auth.require_admin)):
+def update_user(user_id: int, user: UserUpdate, admin: str = Depends(auth.require_admin)):
     import bcrypt
+    app_logger.info("admin: user updated id=%d by=%s", user_id, admin)
     conn = db.connect()
     try:
         if user_id == 1:
@@ -1192,7 +1234,8 @@ def update_user(user_id: int, user: UserUpdate, _=Depends(auth.require_admin)):
         conn.close()
 
 @app.delete("/api/users/{user_id}")
-def delete_user(user_id: int, _=Depends(auth.require_admin)):
+def delete_user(user_id: int, admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: user deleted id=%d by=%s", user_id, admin)
     conn = db.connect()
     try:
         if user_id == 1:
@@ -1368,7 +1411,8 @@ def smartlists_get(_=Depends(require_basic)):
     return JSONResponse(_smartlists_load())
 
 @app.post("/smartlists.json", response_class=JSONResponse)
-async def smartlists_post(request: Request, _=Depends(require_basic)):
+async def smartlists_post(request: Request, admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: smart lists updated by=%s", admin)
     raw = await request.body()
     if not raw:
         return JSONResponse({"ok": False, "error": "empty body"}, status_code=400)
@@ -1407,12 +1451,14 @@ def index_status(_=Depends(require_basic)):
     return JSONResponse({**_INDEX_STATUS, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(_=Depends(require_basic)):
+def admin_reindex(admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: reindex triggered by=%s", admin)
     _start_scan(force=True)
     return JSONResponse({"ok": True, "started": True})
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
-def admin_thumbs_precache(_=Depends(require_basic)):
+def admin_thumbs_precache(admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: thumbnail precache triggered by=%s", admin)
     if _THUMB_STATUS["running"]:
         return JSONResponse({"ok": True, "started": False, "reason": "already running"})
     t = threading.Thread(target=_run_precache_thumbs, args=(THUMB_WORKERS,), daemon=True)
@@ -1460,7 +1506,8 @@ def pages_cache_status(_=Depends(require_basic)):
     return JSONResponse(_page_cache_status())
 
 @app.post("/admin/pages/cleanup", response_class=JSONResponse)
-def admin_pages_cleanup(_=Depends(require_basic)):
+def admin_pages_cleanup(admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: page cache cleanup triggered by=%s", admin)
     res = _clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
     return JSONResponse({"ok": True, **res})
 

@@ -18,6 +18,9 @@ DISABLE_AUTH = _parse_bool("DISABLE_AUTH", False)
 USER = os.getenv("OPDS_BASIC_USER", "admin")
 PASS = os.getenv("OPDS_BASIC_PASS", "change-me")
 
+if DISABLE_AUTH:
+    log.warning("authentication is DISABLED via DISABLE_AUTH env var")
+
 security = HTTPBasic()
 
 # Pre-parse trusted networks
@@ -62,6 +65,7 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
     # Standard constant-time check against the root config user
     if secrets.compare_digest(supplied_user, USER.encode("utf8")) and \
        secrets.compare_digest(supplied_pass, PASS.encode("utf8")):
+        log.info("auth success (env): user=%s", credentials.username)
         return {"id": 1, "username": USER, "is_admin": 1}
 
     # If that fails, check the SQLite database
@@ -75,6 +79,7 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
         if user_row:
             hashed = user_row["password_hash"]
             if bcrypt.checkpw(supplied_pass, hashed.encode('utf-8')):
+                log.info("auth success (db): user=%s", credentials.username)
                 return {
                     "id": user_row["id"],
                     "username": user_row["username"],
@@ -82,7 +87,8 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
                 }
     finally:
         conn.close()
-        
+
+    log.warning("auth failure: user=%s", credentials.username)
     return None
 
 def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -90,18 +96,20 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
 
     Returns username on success, raises HTTPException on authentication failure.
     """
-    # Optional IP logging can be done here using get_real_client_ip(request)
-
     if DISABLE_AUTH:
         return "anonymous"
 
     user = authenticate_user(credentials)
     if not user:
+        client_ip = get_real_client_ip(request)
+        log.warning("login rejected: user=%s ip=%s", credentials.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Basic"},
         )
+    client_ip = get_real_client_ip(request)
+    log.info("login accepted: user=%s ip=%s", user["username"], client_ip)
     return user["username"]
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -114,9 +122,13 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
 
     user = authenticate_user(credentials)
     if not user or not user["is_admin"]:
+        client_ip = get_real_client_ip(request)
+        log.warning("admin access rejected: user=%s ip=%s", credentials.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username, password, or insufficient permissions",
             headers={"WWW-Authenticate": "Basic"},
         )
+    client_ip = get_real_client_ip(request)
+    log.info("admin access accepted: user=%s ip=%s", user["username"], client_ip)
     return user["username"]

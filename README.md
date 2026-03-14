@@ -44,13 +44,13 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 **Supported Clients**
 
-| App                          | Downloads | Search | Streaming | 
-| ---------------------------  | --  | -- | -- | 
-| Panels (iOS)                 | ✔️  |✔️  |✔️  |
-| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  |
-| Cantook (iOS)                | ✔️  | ❌  | ❌  |
-| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  |
-| Chunky (iOS)                 | ✔️  | ❌  | ❌  |
+| App | Downloads | Search | Streaming | OPDS Version |
+|---|---|---|---|---| 
+| Panels (iOS)                 | ✔️  |✔️  |✔️  | OPDS 1.2 |
+| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  | OPDS 1.2 |
+| Cantook (iOS)                | ✔️  | ❌  | ❌  | OPDS 1.2 |
+| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 |
+| Chunky (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 |
 
 ---
 
@@ -86,7 +86,9 @@ The server remains responsive during indexing and handles concurrent OPDS reques
 ## 🔗 Links
 
 - **Repository**: [Gitea](https://gitea.baerentsen.space/FrederikBaerentsen/ComicOPDS)
-- **OPDS Specification**: [OPDS 1.2](https://specs.opds.io/opds-1.2)
+- **OPDS Specifications**:
+  - [OPDS 1.2](https://specs.opds.io/opds-1.2)
+  - [OPDS 2.0](https://specs.opds.io/opds-2.0)
 - **OPDS Page Streaming Extension**: [OPDS PSE 1.1](https://anansi-project.github.io/docs/opds-pse/specs/v1.1)
 - **Buy Me a Coffee**: [frederikb](https://www.buymeacoffee.com/frederikb)
 

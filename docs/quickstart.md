@@ -43,6 +43,10 @@ services:
 
 > 💡 This minimal configuration includes only the required environment variables. For additional optional settings like authentication, caching, and performance tuning, see the complete list at [Configuration](configuration.md).
 
+### Accessing Your Library
+
+Once running, connect your OPDS client (Panels, KyBook 3, etc.) to: `http://192.168.10.10:8382/` (or your server's IP/domain). The server automatically negotiates OPDS 1.2 or 2.0 based on your client.
+
 ### Launch Commands
 
 ```bash

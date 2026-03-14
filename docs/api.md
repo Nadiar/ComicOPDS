@@ -44,6 +44,8 @@ ComicOPDS exposes both user-facing endpoints (for OPDS clients and the dashboard
 | `/debug/children?path=...` | `GET` | JSON list of child items (files/folders) under a path. Useful for testing indexing. |
 | `/debug/fts` | `GET` | Returns `{ "fts5": true/false }` indicating whether SQLite FTS5 is enabled. |
 
-⚠️ **Note:**  
-- Admin and debug endpoints require Basic Auth unless `DISABLE_AUTH=true` is set.  
-- OPDS endpoints follow the OPDS 1.2 specification and should work with Panels and other compliant OPDS clients.  
+⚠️ **Note:**
+
+- Admin and debug endpoints require Basic Auth unless `DISABLE_AUTH=true` is set.
+- OPDS endpoints automatically serve OPDS 1.2 or OPDS 2.0 based on the client's `Accept` header (content negotiation). This works transparently with any compliant OPDS 1.2/2.0 client.
+  

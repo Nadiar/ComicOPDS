@@ -11,9 +11,11 @@ DB_PATH = Path("/data/library.db")
 HAS_FTS5: bool = False
 
 def has_fts5() -> bool:
+    """Check if SQLite FTS5 extension is available."""
     return HAS_FTS5
 
 def connect() -> sqlite3.Connection:
+    """Create and return a new SQLite database connection with schema initialization."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try: conn.execute("PRAGMA journal_mode=WAL;")
@@ -133,7 +135,11 @@ def seed_admin_user(username: str, password: str) -> None:
 # ----------------------------- Scan lifecycle ---------------------------------
 
 def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, float]:
-    """Returns a dictionary of all current rel paths and their mtimes in the DB."""
+    """Get all current items with their modification times and sizes.
+
+    Returns:
+        Dictionary mapping rel paths to (mtime, size) tuples for incremental scan comparison.
+    """
     rows = conn.execute("SELECT rel, mtime, size FROM items").fetchall()
     # Add a fractional size check to the dictionary payload to ensure it covers both metadata cache changes
     return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0)) for r in rows}
@@ -143,7 +149,15 @@ def begin_scan(conn: sqlite3.Connection) -> None:
     pass
 
 def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> int:
-    """Removes any rows in the database that are no longer present on disk."""
+    """Remove items from database that are no longer present on disk.
+
+    Args:
+        conn: SQLite connection
+        current_rels: Set of rel paths that currently exist on filesystem
+
+    Returns:
+        Number of items removed from database.
+    """
     rows = conn.execute("SELECT rel FROM items").fetchall()
     db_rels = {r["rel"] for r in rows}
     
@@ -163,6 +177,7 @@ def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> i
     return len(missing)
 
 def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime: float) -> None:
+    """Insert or update a directory entry in the database."""
     conn.execute(
         """
         INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
@@ -177,6 +192,7 @@ def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime
     )
 
 def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str) -> None:
+    """Insert or update a file entry in the database."""
     conn.execute(
         """
         INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
@@ -193,6 +209,7 @@ def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime:
     )
 
 def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:
+    """Insert or update comic metadata (from ComicInfo.xml) for an item."""
     cols = [
         "title","series","number","volume","year","month","day",
         "writer","publisher","summary","genre","tags","characters",
@@ -296,6 +313,7 @@ def _like_term(s: str) -> str:
     return f"%{s}%"
 
 def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
+    """Execute full-text search query against indexed content."""
     words, years = _split_query(q)
     params: List[Any] = []
     where: List[str] = ["i.is_dir=0"]
@@ -337,6 +355,7 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
     return conn.execute(sql, params).fetchall()
 
 def search_count(conn: sqlite3.Connection, q: str) -> int:
+    """Get total count of full-text search results."""
     words, years = _split_query(q)
     params: List[Any] = []
     where: List[str] = ["i.is_dir=0"]
@@ -561,7 +580,7 @@ def _order_by_for_sort(sort: str) -> str:
 
 # ---- Smartlist runners --------------------------------------------------------
 
-def smartlist_query(
+def smartlist_query(  # pylint: disable=too-many-branches
     conn: sqlite3.Connection,
     groups: List[Dict[str, Any]],
     sort: str,
@@ -569,6 +588,7 @@ def smartlist_query(
     offset: int,
     distinct_by_series: Any
 ):
+    """Execute smart list query with filtering and pagination."""
     where, params = build_smartlist_where(groups)
     order_clause = _order_by_for_sort(sort)
 
@@ -632,6 +652,7 @@ def smartlist_query(
     return conn.execute(sql, (*params, *fts_params, limit, offset)).fetchall()
 
 def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> int:
+    """Get total count of items matching smart list filters."""
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     row = conn.execute(f"""
@@ -645,6 +666,7 @@ def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> i
 # ----------------------------- Stats ------------------------------------------
 
 def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
+    """Get library statistics (item counts, storage size, etc.)."""
     out: Dict[str, Any] = {}
 
     out["total_comics"] = conn.execute(

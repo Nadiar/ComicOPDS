@@ -52,6 +52,10 @@ def get_real_client_ip(request: Request) -> str:
     return client_host
 
 def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
+    """Authenticate user by username and password.
+
+    Checks environment variables first, then database. Returns user dict on success, None on failure.
+    """
     supplied_user = credentials.username.encode("utf8")
     supplied_pass = credentials.password.encode("utf8")
     
@@ -82,8 +86,12 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> Optional[dict]:
     return None
 
 def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """FastAPI dependency to require basic HTTP authentication.
+
+    Returns username on success, raises HTTPException on authentication failure.
+    """
     # Optional IP logging can be done here using get_real_client_ip(request)
-    
+
     if DISABLE_AUTH:
         return "anonymous"
 
@@ -97,6 +105,10 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
     return user["username"]
 
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    """FastAPI dependency to require admin-level HTTP authentication.
+
+    Returns username on success, raises HTTPException if user is not admin.
+    """
     if DISABLE_AUTH:
         return "anonymous"
 

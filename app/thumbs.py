@@ -56,6 +56,7 @@ def _list_image_entries(zf: zipfile.ZipFile) -> list[str]:
     return [n for n in zf.namelist() if Path(n).suffix.lower() in valid and not n.endswith("/")]
 
 def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
+    """Check if thumbnail already exists on disk, return path if found."""
     p = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
     return p if p.exists() else None
 
@@ -81,6 +82,7 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     return dest
 
 def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str]) -> Optional[Path]:
+    """Generate and cache thumbnail from CBZ cover image."""
     """
     Create the thumbnail if missing. Returns the path if it exists afterwards.
     Logs errors to /data/thumbs_errors.log via _log_thumb_error().
@@ -135,6 +137,7 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str])
         return None
 
 def ensure_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
+    """Ensure thumbnail exists for item, generating it if necessary."""
     """
     Ensure a thumb exists (lazy). Uses LIBRARY_DIR and rel to find the CBZ.
     """

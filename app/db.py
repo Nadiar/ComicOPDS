@@ -80,6 +80,10 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     if not _column_exists(conn, "meta", "format"):
         _add_column(conn, "meta", "format", "TEXT")
 
+    # migration: ensure 'page_count' column exists in items table
+    if not _column_exists(conn, "items", "page_count"):
+        _add_column(conn, "items", "page_count", "INTEGER DEFAULT 0")
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_isdir    ON items(is_dir)")
@@ -192,21 +196,22 @@ def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime
         (rel, name, parent, mtime),
     )
 
-def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str) -> None:
+def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str, page_count: int = 0) -> None:
     """Insert or update a file entry in the database."""
     conn.execute(
         """
-        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
-        VALUES (?, ?, ?, 0, ?, ?, ?)
+        INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext, page_count)
+        VALUES (?, ?, ?, 0, ?, ?, ?, ?)
         ON CONFLICT(rel) DO UPDATE SET
           name=excluded.name,
           parent=excluded.parent,
           is_dir=excluded.is_dir,
           size=excluded.size,
           mtime=excluded.mtime,
-          ext=excluded.ext
+          ext=excluded.ext,
+          page_count=excluded.page_count
         """,
-        (rel, name, parent, size, mtime, ext),
+        (rel, name, parent, size, mtime, ext, page_count),
     )
 
 def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:

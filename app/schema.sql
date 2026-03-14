@@ -1,12 +1,13 @@
 -- Items (dirs & files)
 CREATE TABLE IF NOT EXISTS items (
-  rel    TEXT PRIMARY KEY,
-  name   TEXT,
-  parent TEXT,
-  is_dir INTEGER NOT NULL,
-  size   INTEGER,
-  mtime  REAL,
-  ext    TEXT
+  rel        TEXT PRIMARY KEY,
+  name       TEXT,
+  parent     TEXT,
+  is_dir     INTEGER NOT NULL,
+  size       INTEGER,
+  mtime      REAL,
+  ext        TEXT,
+  page_count INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_items_parent ON items(parent);
 CREATE INDEX IF NOT EXISTS idx_items_name   ON items(name);

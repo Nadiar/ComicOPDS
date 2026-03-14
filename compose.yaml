@@ -10,13 +10,13 @@ services:
       URL_PREFIX: ""                               # or "/comics" if served under a subpath
       DISABLE_AUTH: "false"
       OPDS_BASIC_USER: "admin"
-      OPDS_BASIC_PASS: "UGYMzCWR6cLGW3GF3q6KuRsPRhGp8rRX"
+      OPDS_BASIC_PASS: "change-me"
       ACTIVATE_CRON: "true"
       CRON_SCHEDULE: "0 * * * *"
-      AUTO_INDEX_ON_START: "false"
+      AUTO_INDEX_ON_START: "true"
       PRECACHE_THUMBS: "true"
-      PRECACHE_ON_START: "false"   #  trigger at boot
+      PRECACHE_ON_START: "true"   #  trigger at boot
       THUMB_WORKERS: "3"   # tune for your CPU/IO
     volumes:
-      - "./Comics:/library:ro"
-      - ./data:/data
+      - ${CONTAINER_ROOT}/Comics:/library:ro
+      - ${CONTAINER_ROOT}/data:/data

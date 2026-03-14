@@ -240,7 +240,6 @@ def _run_scan():
                     mtime=mtime,
                     parent=_parent_rel(rel),
                     ext="cbz",
-                    page_count=page_count,
                 )
                 meta = _read_comicinfo(p)
                 if meta:

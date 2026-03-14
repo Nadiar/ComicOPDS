@@ -1111,8 +1111,8 @@ class UserCreate(BaseModel):
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
-    password: str = None
-    is_admin: bool = None
+    password: Optional[str] = None
+    is_admin: Optional[bool] = None
 
 @app.get("/api/users")
 def list_users(_=Depends(auth.require_admin)):

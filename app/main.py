@@ -670,7 +670,7 @@ def _entry_json_from_row(row) -> dict:
         abs_file = LIBRARY_DIR / rel
 
         download_href = f"/download?path={quote(rel)}"
-        pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
+        manifest_href = f"/opds/v2/manifest?path={quote(rel)}"
         page_count = int(rget(row, "page_count") or 0)
 
         comicvine_issue = rget(row, "comicvineissue")
@@ -680,28 +680,39 @@ def _entry_json_from_row(row) -> dict:
             if p:
                 thumb_href_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
 
+        meta: dict[str, Any] = {
+            "title": _display_title(row),
+            "author": [{"name": a} for a in _authors_from_row(row)],
+            "identifier": f"{base}{_abs_url(download_href)}",
+            "modified": mtime_rfc3339(row["mtime"]),
+        }
+        if page_count:
+            meta["numberOfPages"] = page_count
+
+        series = rget(row, "series")
+        number = rget(row, "number")
+        if series:
+            belongs_to: dict[str, Any] = {"series": {"name": series}}
+            if number:
+                try:
+                    belongs_to["series"]["position"] = float(number) if "." in number else int(number)
+                except (ValueError, TypeError):
+                    pass
+            meta["belongsTo"] = belongs_to
+
         pub = {
-            "metadata": {
-                "title": _display_title(row),
-                "author": [{"name": a} for a in _authors_from_row(row)],
-                "identifier": f"{base}{_abs_url(download_href)}",
-                "modified": mtime_rfc3339(row["mtime"])
-            },
+            "metadata": meta,
             "links": [
+                {
+                    "rel": "self",
+                    "href": f"{base}{_abs_url(manifest_href)}",
+                    "type": "application/divina+json"
+                },
                 {
                     "rel": "http://opds-spec.org/acquisition",
                     "href": f"{base}{_abs_url(download_href)}",
                     "type": mime_for(abs_file)
                 },
-                {
-                    "rel": "http://vaemendis.net/opds-pse/stream",
-                    "href": f"{base}{_abs_url(pse_template)}",
-                    "type": "image/jpeg",
-                    "properties": {
-                        "numberOfItems": page_count
-                    },
-                    "templated": True
-                }
             ],
             "images": []
         }
@@ -1056,6 +1067,103 @@ def thumb(path: str, _=Depends(require_basic)):
     if not p or not p.exists():
         raise HTTPException(404, "No thumbnail")
     return FileResponse(p, media_type="image/jpeg")
+
+# -------------------- DiViNa manifest (OPDS 2.0 page streaming) --------------------
+DIVINA_PROFILE = "https://readium.org/webpub-manifest/profiles/divina"
+
+@app.get("/opds/v2/manifest")
+def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), user: str = Depends(require_basic)):
+    """Return a DiViNa (Readium Web Publication) manifest for page-level streaming.
+
+    This is the OPDS 2.0-native mechanism for page streaming, replacing the
+    OPDS-PSE 1.1 extension used in OPDS 1.2 Atom feeds.
+    """
+    app_logger.info("divina_manifest: user=%s file=%s", user, path)
+    abs_cbz = _abspath(path)
+    if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
+        raise HTTPException(404, "Book not found")
+
+    conn = db.connect()
+    try:
+        row = db.get_item(conn, path)
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(404, "Item not in index")
+
+    base = SERVER_BASE.rstrip("/")
+    pages = _cbz_list_pages(abs_cbz)
+    page_count = len(pages)
+
+    # Build readingOrder: one link per page image
+    reading_order = []
+    for i in range(page_count):
+        page_link: dict[str, Any] = {
+            "href": f"{base}{_abs_url(f'/pse/page?path={quote(path)}&page={i}')}",
+            "type": "image/jpeg",
+        }
+        if i == 0:
+            page_link["rel"] = "cover"
+        reading_order.append(page_link)
+
+    # Metadata
+    meta: dict[str, Any] = {
+        "title": _display_title(row),
+        "conformsTo": DIVINA_PROFILE,
+        "numberOfPages": page_count,
+        "readingProgression": "ltr",
+    }
+
+    authors = _authors_from_row(row)
+    if authors:
+        meta["author"] = [{"name": a} for a in authors]
+
+    series = rget(row, "series")
+    number = rget(row, "number")
+    if series:
+        belongs_to: dict[str, Any] = {"series": {"name": series}}
+        if number:
+            try:
+                belongs_to["series"]["position"] = float(number) if "." in number else int(number)
+            except (ValueError, TypeError):
+                pass
+        meta["belongsTo"] = belongs_to
+
+    issued = _issued_from_row(row)
+    if issued:
+        meta["published"] = issued
+
+    summary = rget(row, "summary")
+    if summary:
+        meta["description"] = summary
+
+    # Thumbnail resources
+    resources = []
+    cvid = rget(row, "comicvineissue")
+    if (rget(row, "ext") or "").lower() == "cbz":
+        p = have_thumb(path, cvid)
+        if p:
+            resources.append({
+                "rel": "cover",
+                "href": f"{base}{_abs_url('/thumb?path=' + quote(path))}",
+                "type": "image/jpeg",
+            })
+
+    self_href = f"{base}{_abs_url(f'/opds/v2/manifest?path={quote(path)}')}"
+
+    manifest = {
+        "@context": "https://readium.org/webpub-manifest/context.jsonld",
+        "metadata": meta,
+        "links": [
+            {"rel": "self", "href": self_href, "type": "application/divina+json"}
+        ],
+        "readingOrder": reading_order,
+    }
+    if resources:
+        manifest["resources"] = resources
+
+    return JSONResponse(content=manifest, media_type="application/divina+json")
 
 # -------------------- PSE endpoints --------------------
 @app.get("/pse/stream", response_class=Response)

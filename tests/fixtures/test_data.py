@@ -60,36 +60,30 @@ def index_test_data(conn: sqlite3.Connection, library_dir: Path):
 
     # Insert directory entries first (using forward slashes for consistency)
     series_rel = str(test_dirs["series"].relative_to(library_dir)).replace("\\", "/")
-    db.upsert_file(
+    db.upsert_dir(
         conn,
         series_rel,
         test_dirs["series"].name,
-        0,
-        test_dirs["series"].stat().st_mtime,
         "",
-        ""
+        test_dirs["series"].stat().st_mtime,
     )
 
     spider_man_rel = str(test_dirs["spider_man"].relative_to(library_dir)).replace("\\", "/")
-    db.upsert_file(
+    db.upsert_dir(
         conn,
         spider_man_rel,
         test_dirs["spider_man"].name,
-        0,
-        test_dirs["spider_man"].stat().st_mtime,
         series_rel,
-        ""
+        test_dirs["spider_man"].stat().st_mtime,
     )
 
     x_men_rel = str(test_dirs["x_men"].relative_to(library_dir)).replace("\\", "/")
-    db.upsert_file(
+    db.upsert_dir(
         conn,
         x_men_rel,
         test_dirs["x_men"].name,
-        0,
-        test_dirs["x_men"].stat().st_mtime,
         series_rel,
-        ""
+        test_dirs["x_men"].stat().st_mtime,
     )
 
     for cbz_file in test_files:

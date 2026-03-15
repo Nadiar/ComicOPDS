@@ -55,8 +55,8 @@ class TestOPDSPagination:
 
         assert response.status_code == 200
         data = response.json()
-        publications = data.get("publications", [])
-        assert len(publications) > 0
+        items = data.get("publications", []) + data.get("navigation", [])
+        assert len(items) > 0
 
     def test_pagination_returns_consistent_results(self, client_with_data, auth_headers, opds2_headers):
         """Pagination returns different results on different pages."""
@@ -68,11 +68,11 @@ class TestOPDSPagination:
         data1 = response1.json()
         data2 = response2.json()
 
-        pubs1 = data1.get("publications", [])
-        pubs2 = data2.get("publications", [])
+        items1 = data1.get("publications", []) + data1.get("navigation", [])
+        items2 = data2.get("publications", []) + data2.get("navigation", [])
 
-        # Both should have items and counts should be reasonable
-        assert len(pubs1) > 0 or len(pubs2) > 0
+        # At least one page should have items
+        assert len(items1) > 0 or len(items2) > 0
 
     def test_pagination_links_present_opds2(self, client_with_data, auth_headers, opds2_headers):
         """OPDS 2.0 pagination includes navigation links."""

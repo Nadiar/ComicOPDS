@@ -9,6 +9,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import ceil
@@ -119,6 +120,33 @@ _INDEX_STATUS = {
 }
 _INDEX_LOCK = threading.Lock()
 
+# Mapping of Windows-1252 C1 control chars (0x80-0x9F) to their Unicode equivalents.
+# These bytes are invalid in UTF-8 but sometimes appear when metadata tools
+# write CP1252 text without proper encoding declaration.
+_CP1252_MAP: dict[int, str] = {
+    0x80: "\u20AC", 0x82: "\u201A", 0x83: "\u0192", 0x84: "\u201E",
+    0x85: "\u2026", 0x86: "\u2020", 0x87: "\u2021", 0x88: "\u02C6",
+    0x89: "\u2030", 0x8A: "\u0160", 0x8B: "\u2039", 0x8C: "\u0152",
+    0x8E: "\u017D", 0x91: "\u2018", 0x92: "\u2019", 0x93: "\u201C",
+    0x94: "\u201D", 0x95: "\u2022", 0x96: "\u2013", 0x97: "\u2014",
+    0x98: "\u02DC", 0x99: "\u2122", 0x9A: "\u0161", 0x9B: "\u203A",
+    0x9C: "\u0153", 0x9E: "\u017E", 0x9F: "\u0178",
+}
+
+def _normalize_text(text: str) -> str:
+    """Normalize Unicode text for safe storage and XML/JSON output.
+
+    Applies NFC normalization, maps stray Windows-1252 C1 control characters
+    to their proper Unicode equivalents, and strips replacement characters.
+    """
+    # Map C1 control chars that may have leaked from CP1252 metadata
+    text = text.translate({k: v for k, v in _CP1252_MAP.items()})
+    # NFC: canonical decomposition then canonical composition
+    text = unicodedata.normalize("NFC", text)
+    # Strip replacement characters from decoding errors
+    text = text.replace("\ufffd", "")
+    return text
+
 # -------------------- Small helpers --------------------
 def rget(row, key: str, default=None):
     """Safe access for sqlite3.Row (no .get())."""
@@ -189,7 +217,7 @@ def _read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
                 root = tree.getroot()
                 for el in root:
                     k = el.tag.lower()
-                    v = (el.text or "").strip()
+                    v = _normalize_text((el.text or "").strip())
                     if v:
                         meta[k] = v
                 if "title" not in meta and "booktitle" in meta:

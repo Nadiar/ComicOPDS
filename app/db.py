@@ -139,15 +139,14 @@ def seed_admin_user(username: str, password: str) -> None:
 
 # ----------------------------- Scan lifecycle ---------------------------------
 
-def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, tuple[float, int]]:
-    """Get all current items with their modification times and sizes.
+def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, tuple[float, int, int]]:
+    """Get all current items with their modification times, sizes, and page counts.
 
     Returns:
-        Dictionary mapping rel paths to (mtime, size) tuples for incremental scan comparison.
+        Dictionary mapping rel paths to (mtime, size, page_count) tuples for incremental scan comparison.
     """
-    rows = conn.execute("SELECT rel, mtime, size FROM items").fetchall()
-    # Add a fractional size check to the dictionary payload to ensure it covers both metadata cache changes
-    return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0)) for r in rows}
+    rows = conn.execute("SELECT rel, mtime, size, page_count FROM items").fetchall()
+    return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0), int(r["page_count"] or 0)) for r in rows}
 
 def begin_scan(conn: sqlite3.Connection) -> None:
     # No longer deletes everything; this is an incremental scan.
@@ -165,7 +164,7 @@ def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> i
     """
     rows = conn.execute("SELECT rel FROM items").fetchall()
     db_rels = {r["rel"] for r in rows}
-    
+
     missing = db_rels - current_rels
     if missing:
         # SQLite maximum parameters per query is usually 999

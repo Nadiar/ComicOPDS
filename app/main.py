@@ -181,9 +181,9 @@ def _index_progress(rel: str):
     _INDEX_STATUS["done"] += 1
     _INDEX_STATUS["current"] = rel
 
-def _run_scan():
+def _run_scan(force: bool = False):
     """Background scanner: writes into SQLite using its own connection."""
-    app_logger.info(f"Starting filesystem scan of {LIBRARY_DIR}")
+    app_logger.info(f"Starting {'full' if force else 'incremental'} filesystem scan of {LIBRARY_DIR}")
     conn = db.connect()
     try:
         db.begin_scan(conn)
@@ -195,8 +195,8 @@ def _run_scan():
         total = _count_cbz(LIBRARY_DIR)
         app_logger.info(f"Found {total} CBZ files, beginning index")
         _set_status(total=total, phase="indexing")
-        
-        existing_items = db.get_existing_items_mtime(conn)
+
+        existing_items = {} if force else db.get_existing_items_mtime(conn)
         current_rels = set()
         _uncommitted = 0
 
@@ -223,12 +223,12 @@ def _run_scan():
                 st = p.stat()
                 mtime = st.st_mtime
                 size = st.st_size
-                
+
                 # Check for existing matching item
                 existing = existing_items.get(rel)
 
-                if existing and existing[0] == float(mtime) and existing[1] == int(size):
-                    # We have a matching file size & mtime, so skip the costly metadata parsing
+                if existing and existing[0] == float(mtime) and existing[1] == int(size) and existing[2] > 0:
+                    # mtime+size match and page_count is populated — skip
                     scan_stats["skipped"] += 1
                     _index_progress(rel)
                     continue
@@ -346,20 +346,10 @@ def _run_precache_thumbs(workers: int):
 
     with _THUMB_LOCK:
         _THUMB_STATUS.update({"running": False, "ended_at": time.time()})
-@app.post("/admin/reindex")
-def trigger_reindex(admin: str = Depends(auth.require_admin)):
-    """Trigger the background scanner to perform an incremental update."""
-    app_logger.info("admin: reindex triggered by=%s", admin)
-    if _INDEX_STATUS["running"]:
-        return {"status": "already_running"}
-
-    threading.Thread(target=_run_scan, daemon=True).start()
-    return {"status": "started"}
-
 def _start_scan(force=False):
-    if not force and _INDEX_STATUS["running"]:
+    if _INDEX_STATUS["running"]:
         return
-    t = threading.Thread(target=_run_scan, daemon=True)
+    t = threading.Thread(target=_run_scan, args=(force,), daemon=True)
     t.start()
 
 @app.get("/debug/fts")
@@ -651,7 +641,7 @@ def _entry_json_from_row(row) -> dict:
         issued = _issued_from_row(row)
         if issued:
             pub["metadata"]["published"] = issued
-            
+
         summary = rget(row, "summary")
         if summary:
             pub["metadata"]["description"] = summary
@@ -671,7 +661,7 @@ def _entry_json_from_row(row) -> dict:
                 "type": "image/jpeg",
                 "rel": "http://opds-spec.org/image/thumbnail"
             })
-            
+
         return pub
 
 def _feed_json(rows: list, title: str, self_href: str,
@@ -682,7 +672,7 @@ def _feed_json(rows: list, title: str, self_href: str,
           os_items: Optional[int] = None,
           search_href: str = "/opds/search.xml",
           start_href_override: Optional[str] = None) -> dict:
-          
+
     base = SERVER_BASE.rstrip("/")
     feed = {
         "metadata": {
@@ -697,7 +687,7 @@ def _feed_json(rows: list, title: str, self_href: str,
         "navigation": [],
         "publications": []
     }
-    
+
     if os_total is not None:
         feed["metadata"]["numberOfItems"] = os_total
 
@@ -709,19 +699,19 @@ def _feed_json(rows: list, title: str, self_href: str,
 
     if prev_href:
         feed["links"].append({"rel": "previous", "href": f"{base}{_abs_url(prev_href)}", "type": "application/opds+json"})
-        
+
     for r in rows:
         if isinstance(r, dict) and 'is_smart' in r:
             feed["navigation"].append({"title": r["title"], "href": r["href"], "type": "application/opds+json", "rel": "subsection"})
             continue
-        
+
         entry = _entry_json_from_row(r)
         if r.get("is_dir") if isinstance(r, dict) else r["is_dir"]:
             entry["rel"] = "subsection"
             feed["navigation"].append(entry)
         else:
             feed["publications"].append(entry)
-            
+
     return feed
 
 # -------------------- Routes --------------------
@@ -1215,7 +1205,7 @@ def update_user(user_id: int, user: UserUpdate, admin: str = Depends(auth.requir
     try:
         if user_id == 1:
             raise HTTPException(status_code=403, detail="Cannot modify the master Admin account from the UI. Change OPDS_BASIC_PASS in your docker environment.")
-        
+
         updates = []
         params = []
         if user.password:
@@ -1225,7 +1215,7 @@ def update_user(user_id: int, user: UserUpdate, admin: str = Depends(auth.requir
         if user.is_admin is not None:
             updates.append("is_admin = ?")
             params.append(1 if user.is_admin else 0)
-            
+
         if updates:
             params.append(user_id)
             conn.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
@@ -1289,7 +1279,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
         conn.close()
     cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
-    
+
     if is_opds2:
         row_dicts = []
         base = SERVER_BASE.rstrip("/")
@@ -1452,10 +1442,12 @@ def index_status(_=Depends(require_basic)):
     return JSONResponse({**_INDEX_STATUS, "usable": usable})
 
 @app.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(admin: str = Depends(auth.require_admin)):
-    app_logger.info("admin: reindex triggered by=%s", admin)
-    _start_scan(force=True)
-    return JSONResponse({"ok": True, "started": True})
+def admin_reindex(force: bool = Query(False), admin: str = Depends(auth.require_admin)):
+    app_logger.info("admin: reindex triggered by=%s force=%s", admin, force)
+    if _INDEX_STATUS["running"]:
+        return JSONResponse({"ok": True, "started": False, "reason": "already running"})
+    _start_scan(force=force)
+    return JSONResponse({"ok": True, "started": True, "mode": "full" if force else "incremental"})
 
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
 def admin_thumbs_precache(admin: str = Depends(auth.require_admin)):

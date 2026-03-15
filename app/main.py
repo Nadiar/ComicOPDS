@@ -64,6 +64,21 @@ env = Environment(
     autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
 
+OPDS_XML_MEDIA = "application/atom+xml;profile=opds-catalog;charset=utf-8"
+
+def _xml_response(xml: str, headers: dict | None = None,
+                  media_type: str = OPDS_XML_MEDIA) -> Response:
+    """Return an XML Response with explicit UTF-8 encoding.
+
+    Pre-encodes the string to bytes to avoid environment-dependent
+    encoding issues (e.g. CP437 misinterpretation in Docker containers).
+    """
+    return Response(
+        content=xml.encode("utf-8"),
+        media_type=media_type,
+        headers=headers,
+    )
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     try:
@@ -813,7 +828,7 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
 
         xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href,
                    search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
+        return _xml_response(xml, headers=cache_hdrs)
 
 @app.get("/", response_class=Response)
 def root(request: Request, _=Depends(require_basic)):
@@ -827,7 +842,7 @@ def opensearch_description(request: Request, _=Depends(require_basic)):
     ob = _opds_base(request)
     tpl = env.get_template("search-description.xml.j2")
     xml = tpl.render(base=SERVER_BASE.rstrip("/"), opds_base=ob)
-    return Response(content=xml, media_type="application/opensearchdescription+xml")
+    return _xml_response(xml, media_type="application/opensearchdescription+xml;charset=utf-8")
 
 @app.get("/opds/search", response_class=Response)
 @app.get("/opds12/search", response_class=Response)
@@ -892,7 +907,7 @@ def opds_search(request: Request,
             start_href_override=ob,
             updated=updated_ts,
         )
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
+        return _xml_response(xml, headers=cache_hdrs)
 
 # -------------------- File endpoints --------------------
 def _abspath(rel: str) -> Path:
@@ -1047,7 +1062,7 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user:
         start_href=_abs_url("/opds"),
         entries=entries_xml,
     )
-    return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog")
+    return _xml_response(xml)
 
 @app.get("/pse/page")
 def pse_page(path: str = Query(...), page: int = Query(0, ge=0), user: str = Depends(require_basic)):
@@ -1364,7 +1379,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
         xml = _feed(entries, title="Smart Lists", self_href=f"{ob}/smart",
                    search_href=f"{ob}/search.xml", start_href_override=ob,
                    updated=updated_ts)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
+        return _xml_response(xml, headers=cache_hdrs)
 
 @app.get("/opds/smart/{slug}", response_class=Response)
 @app.get("/opds12/smart/{slug}", response_class=Response)
@@ -1438,7 +1453,7 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
         entries_xml = [_entry_xml_from_row(r) for r in rows]
         xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href,
                    search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
-        return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
+        return _xml_response(xml, headers=cache_hdrs)
 
 @app.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):

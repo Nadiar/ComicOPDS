@@ -1449,6 +1449,62 @@ def admin_reindex(force: bool = Query(False), admin: str = Depends(auth.require_
     _start_scan(force=force)
     return JSONResponse({"ok": True, "started": True, "mode": "full" if force else "incremental"})
 
+@app.post("/admin/reindex/path", response_class=JSONResponse)
+def admin_reindex_path(path: str = Query(..., description="Relative path to a file or folder inside the library"),
+                       admin: str = Depends(auth.require_admin)):
+    """Index or re-index a specific file or folder by relative path."""
+    app_logger.info("admin: path reindex triggered by=%s path=%s", admin, path)
+    abs_path = (LIBRARY_DIR / path).resolve()
+    # Prevent path traversal outside library
+    try:
+        abs_path.relative_to(LIBRARY_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Path is outside the library directory")
+    if not abs_path.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    conn = db.connect()
+    try:
+        indexed = 0
+        if abs_path.is_file():
+            if abs_path.suffix.lower() != ".cbz":
+                raise HTTPException(status_code=400, detail="Only .cbz files can be indexed")
+            indexed = _index_single_file(conn, abs_path)
+        else:
+            # Walk the directory tree
+            for dirpath, _dirnames, filenames in os.walk(abs_path):
+                dpath = Path(dirpath)
+                if dpath != LIBRARY_DIR:
+                    rel_d = dpath.relative_to(LIBRARY_DIR).as_posix()
+                    db.upsert_dir(conn, rel=rel_d, name=dpath.name,
+                                  parent=_parent_rel(rel_d), mtime=dpath.stat().st_mtime)
+                for fn in filenames:
+                    p = dpath / fn
+                    if p.suffix.lower() == ".cbz":
+                        indexed += _index_single_file(conn, p)
+        conn.commit()
+    finally:
+        conn.close()
+
+    app_logger.info("admin: path reindex completed path=%s indexed=%d", path, indexed)
+    return JSONResponse({"ok": True, "path": path, "indexed": indexed})
+
+def _index_single_file(conn, abs_path: Path) -> int:
+    """Index a single CBZ file into the database. Returns 1 on success, 0 on error."""
+    rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
+    st = abs_path.stat()
+    try:
+        page_count = len(_cbz_list_pages(abs_path))
+    except Exception:
+        page_count = 0
+    db.upsert_file(conn, rel=rel, name=abs_path.stem, size=st.st_size,
+                   mtime=st.st_mtime, parent=_parent_rel(rel), ext="cbz",
+                   page_count=page_count)
+    meta = _read_comicinfo(abs_path)
+    if meta:
+        db.upsert_meta(conn, rel=rel, meta=meta)
+    return 1
+
 @app.post("/admin/thumbs/precache", response_class=JSONResponse)
 def admin_thumbs_precache(admin: str = Depends(auth.require_admin)):
     app_logger.info("admin: thumbnail precache triggered by=%s", admin)

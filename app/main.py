@@ -576,8 +576,23 @@ def _entry_xml_from_row(row) -> str:
         )
 
 # -------------------- OPDS 2.0 helpers (JSON) --------------------
+def _opds_base(request: Request) -> str:
+    """Return the OPDS path base ('/opds', '/opds12', or '/opds20') from the request URL."""
+    path = request.url.path
+    if path.startswith(f"{URL_PREFIX}/opds20"):
+        return "/opds20"
+    if path.startswith(f"{URL_PREFIX}/opds12"):
+        return "/opds12"
+    return "/opds"
+
 def _prefers_opds2(request: Request) -> bool:
     if not request:
+        return False
+    # Path-based override: /opds20/... forces OPDS 2.0, /opds12/... forces 1.2
+    path = request.url.path
+    if path.startswith(f"{URL_PREFIX}/opds20"):
+        return True
+    if path.startswith(f"{URL_PREFIX}/opds12"):
         return False
     accept_headers = request.headers.get("accept", "").split(",")
     for header in accept_headers:
@@ -720,6 +735,8 @@ def health():
     return PlainTextResponse("ok")
 
 @app.get("/opds", response_class=Response)
+@app.get("/opds12", response_class=Response)
+@app.get("/opds20", response_class=Response)
 def browse(request: Request, path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
     path = path.strip("/")
     conn = db.connect()
@@ -733,15 +750,16 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
 
     cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
-    self_href = f"/opds?path={quote(path)}&page={page}" if path else f"/opds?page={page}"
-    next_href = f"/opds?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
-    prev_href = f"/opds?path={quote(path)}&page={page-1}" if page > 1 else None
+    ob = _opds_base(request)
+    self_href = f"{ob}?path={quote(path)}&page={page}" if path else f"{ob}?page={page}"
+    next_href = f"{ob}?path={quote(path)}&page={page+1}" if (start + PAGE_SIZE) < total else None
+    prev_href = f"{ob}?path={quote(path)}&page={page-1}" if page > 1 else None
 
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
         if path == "" and page == 1:
             base = SERVER_BASE.rstrip("/")
-            smart_href = _abs_url("/opds/smart")
+            smart_href = _abs_url(f"{ob}/smart")
             row_dicts.insert(0, {
                 "is_smart": True,
                 "title": "📁 Smart Lists",
@@ -756,7 +774,9 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             prev_href=prev_href,
             os_total=total,
             os_start=start + 1 if total > 0 else 0,
-            os_items=PAGE_SIZE
+            os_items=PAGE_SIZE,
+            search_href=f"{ob}/search.xml",
+            start_href_override=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
@@ -766,7 +786,7 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         if path == "" and page == 1:
             tpl = env.get_template("entry.xml.j2")
             base = SERVER_BASE.rstrip("/")
-            smart_href = _abs_url("/opds/smart")
+            smart_href = _abs_url(f"{ob}/smart")
             smart_entry = tpl.render(
                 entry_id=f"{base}{smart_href}",
                 updated=now_rfc3339(),
@@ -776,7 +796,8 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             )
             entries_xml = [smart_entry] + entries_xml
 
-        xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href)
+        xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href,
+                   search_href=f"{ob}/search.xml", start_href_override=ob)
         return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/", response_class=Response)
@@ -785,12 +806,17 @@ def root(request: Request, _=Depends(require_basic)):
 
 # ---- OpenSearch (descriptor) + Search results (OPDS 1.x) ----
 @app.get("/opds/search.xml", response_class=Response)
-def opensearch_description(_=Depends(require_basic)):
+@app.get("/opds12/search.xml", response_class=Response)
+@app.get("/opds20/search.xml", response_class=Response)
+def opensearch_description(request: Request, _=Depends(require_basic)):
+    ob = _opds_base(request)
     tpl = env.get_template("search-description.xml.j2")
-    xml = tpl.render(base=SERVER_BASE.rstrip("/"))
+    xml = tpl.render(base=SERVER_BASE.rstrip("/"), opds_base=ob)
     return Response(content=xml, media_type="application/opensearchdescription+xml")
 
 @app.get("/opds/search", response_class=Response)
+@app.get("/opds12/search", response_class=Response)
+@app.get("/opds20/search", response_class=Response)
 def opds_search(request: Request,
                 query: str | None = Query(None, alias="query"),
                 page: int | None = Query(None),
@@ -812,9 +838,10 @@ def opds_search(request: Request,
         conn.close()
 
     cache_hdrs = _opds_cache_headers(last_mod)
-    self_href = f"/opds/search?query={quote(term)}&page={pg}"
-    next_href = f"/opds/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
-    prev_href = f"/opds/search?query={quote(term)}&page={pg-1}" if pg > 1 else None
+    ob = _opds_base(request)
+    self_href = f"{ob}/search?query={quote(term)}&page={pg}"
+    next_href = f"{ob}/search?query={quote(term)}&page={pg+1}" if (offset + len(rows)) < total else None
+    prev_href = f"{ob}/search?query={quote(term)}&page={pg-1}" if pg > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
@@ -828,8 +855,8 @@ def opds_search(request: Request,
             os_total=total,
             os_start=offset + 1 if total > 0 else 0,
             os_items=items,
-            search_href="/opds/search.xml",
-            start_href_override="/opds",
+            search_href=f"{ob}/search.xml",
+            start_href_override=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
@@ -842,8 +869,8 @@ def opds_search(request: Request,
             os_total=total,
             os_start=offset + 1 if total > 0 else 0,
             os_items=items,
-            search_href="/opds/search.xml",
-            start_href_override="/opds",
+            search_href=f"{ob}/search.xml",
+            start_href_override=ob,
         )
         return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
@@ -1270,6 +1297,8 @@ def _save_smartlists(lists: list[dict]) -> None:
     SMARTLISTS_PATH.write_text(json.dumps(lists, ensure_ascii=False, indent=0), encoding="utf-8")
 
 @app.get("/opds/smart", response_class=Response)
+@app.get("/opds12/smart", response_class=Response)
+@app.get("/opds20/smart", response_class=Response)
 def opds_smart_lists(request: Request, _=Depends(require_basic)):
     lists = _load_smartlists()
     conn = db.connect()
@@ -1279,24 +1308,26 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
         conn.close()
     cache_hdrs = _opds_cache_headers(last_mod)
     is_opds2 = _prefers_opds2(request)
+    ob = _opds_base(request)
 
     if is_opds2:
         row_dicts = []
         base = SERVER_BASE.rstrip("/")
         for sl in lists:
-            href = f"/opds/smart/{quote(sl['slug'])}"
+            href = f"{ob}/smart/{quote(sl['slug'])}"
             row_dicts.append({
                 "is_smart": True,
                 "title": sl["name"],
                 "href": f"{base}{_abs_url(href)}"
             })
-        feed_dict = _feed_json(row_dicts, title="Smart Lists", self_href="/opds/smart")
+        feed_dict = _feed_json(row_dicts, title="Smart Lists", self_href=f"{ob}/smart",
+                               search_href=f"{ob}/search.xml", start_href_override=ob)
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         tpl = env.get_template("entry.xml.j2")
         entries = []
         for sl in lists:
-            href = f"/opds/smart/{quote(sl['slug'])}"
+            href = f"{ob}/smart/{quote(sl['slug'])}"
             entries.append(
                 tpl.render(
                     entry_id=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
@@ -1306,10 +1337,13 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                     href_abs=f"{SERVER_BASE.rstrip('/')}{_abs_url(href)}",
                 )
             )
-        xml = _feed(entries, title="Smart Lists", self_href="/opds/smart")
+        xml = _feed(entries, title="Smart Lists", self_href=f"{ob}/smart",
+                   search_href=f"{ob}/search.xml", start_href_override=ob)
         return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/opds/smart/{slug}", response_class=Response)
+@app.get("/opds12/smart/{slug}", response_class=Response)
+@app.get("/opds20/smart/{slug}", response_class=Response)
 def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(require_basic)):
     lists = _load_smartlists()
     sl = next((x for x in lists if x.get("slug") == slug), None)
@@ -1348,11 +1382,12 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     # Total for navigation honors the hard cap
     total_for_nav = min(total, sl_limit) if sl_limit > 0 else total
 
-    self_href = f"/opds/smart/{quote(slug)}?page={page}"
+    ob = _opds_base(request)
+    self_href = f"{ob}/smart/{quote(slug)}?page={page}"
     next_href = None
     if (start + len(rows)) < total_for_nav:
-        next_href = f"/opds/smart/{quote(slug)}?page={page+1}"
-    prev_href = f"/opds/smart/{quote(slug)}?page={page-1}" if page > 1 else None
+        next_href = f"{ob}/smart/{quote(slug)}?page={page+1}"
+    prev_href = f"{ob}/smart/{quote(slug)}?page={page-1}" if page > 1 else None
 
     is_opds2 = _prefers_opds2(request)
     if is_opds2:
@@ -1365,12 +1400,15 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
             prev_href=prev_href,
             os_total=total_for_nav,
             os_start=start + 1 if total_for_nav > 0 else 0,
-            os_items=PAGE_SIZE
+            os_items=PAGE_SIZE,
+            search_href=f"{ob}/search.xml",
+            start_href_override=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [_entry_xml_from_row(r) for r in rows]
-        xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href)
+        xml = _feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href,
+                   search_href=f"{ob}/search.xml", start_href_override=ob)
         return Response(content=xml, media_type="application/atom+xml;profile=opds-catalog", headers=cache_hdrs)
 
 @app.get("/search", response_class=HTMLResponse)

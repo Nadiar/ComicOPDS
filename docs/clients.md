@@ -2,13 +2,13 @@
 
 **Supported Clients**
 
-| App                          | Downloads | Search | Streaming | 
-| ---------------------------  | --  | -- | -- | 
-| Panels (iOS)                 | ✔️  |✔️  |✔️  |
-| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  |
-| Cantook (iOS)                | ✔️  | ❌  | ❌  |
-| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  |
-| Chunky (iOS)                 | ✔️  | ❌  | ❌  |
+| App                          | Downloads | Search | Streaming | Streaming Protocol |
+| ---------------------------  | --  | -- | -- | -- |
+| Panels (iOS)                 | ✔️  |✔️  |✔️  | PSE 1.1 (OPDS 1.2) |
+| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  | — |
+| Cantook (iOS)                | ✔️  | ❌  | ❌  | — |
+| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  | — |
+| Chunky (iOS)                 | ✔️  | ❌  | ❌  | — |
 
 ### Panels for iOS
 
@@ -22,7 +22,8 @@ Panels works with ComicOPDS via OPDS 1.2 with automatic content negotiation supp
 
 ### Client-Specific Notes
 - Some clients work better with smaller `PAGE_SIZE` (e.g., 25 instead of 50)
-- Page streaming (PSE 1.1) requires client support
+- **OPDS 1.2 clients** use OPDS PSE 1.1 for page streaming (e.g., Panels)
+- **OPDS 2.0 clients** should use DiViNa manifests (Readium Web Publication Manifest) for page streaming. The server provides a `self` link with type `application/divina+json` on each publication entry, pointing to a per-book manifest with `readingOrder` containing individual page image links.
 - Thumbnail quality may vary between clients
 
 

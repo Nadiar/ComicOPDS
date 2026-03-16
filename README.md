@@ -6,7 +6,7 @@
 
 ComicOPDS is a lightweight **OPDS 1.2 and OPDS 2.0** server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  
 
-It's optimized for large libraries (10k–100k+ comics), supports FastAPI + SQLite + FTS5 search, thumbnail caching, and streaming (OPDS PSE 1.1).
+It's optimized for large libraries (10k–100k+ comics), supports FastAPI + SQLite + FTS5 search, thumbnail caching, and page streaming (OPDS PSE 1.1 for OPDS 1.2, DiViNa manifests for OPDS 2.0).
 
 Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
@@ -16,6 +16,7 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 **🚀 Added in this Fork:**
 - **OPDS 2.0 Support:** Automatic content-negotiation serving OPDS 1.2 or 2.0 specs depending on the reader client's `Accept` header.
+- **DiViNa Page Streaming (OPDS 2.0):** Native page-level streaming via Readium Web Publication Manifest (DiViNa profile), separate from OPDS PSE 1.1 used in OPDS 1.2 feeds.
 - **Incremental Background Scanner:** Fast, non-destructive background scanning using file modification times, scheduled natively via Docker `cron`.
 - **User Administration UI:** Manage application users via a visual dashboard interface.
 - **Role-Based Access Control:** Separate standard "read-only" users from dashboard administrators.
@@ -44,13 +45,13 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 **Supported Clients**
 
-| App | Downloads | Search | Streaming | OPDS Version |
-|---|---|---|---|---| 
-| Panels (iOS)                 | ✔️  |✔️  |✔️  | OPDS 1.2 |
-| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  | OPDS 1.2 |
-| Cantook (iOS)                | ✔️  | ❌  | ❌  | OPDS 1.2 |
-| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 |
-| Chunky (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 |
+| App | Downloads | Search | Streaming | OPDS Version | Streaming Protocol |
+|---|---|---|---|---|---|
+| Panels (iOS)                 | ✔️  |✔️  |✔️  | OPDS 1.2 | PSE 1.1 |
+| KyBook 3 (iOS)               | ✔️  | ✔️  | ❌  | OPDS 1.2 | — |
+| Cantook (iOS)                | ✔️  | ❌  | ❌  | OPDS 1.2 | — |
+| Marvin 3 (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 | — |
+| Chunky (iOS)                 | ✔️  | ❌  | ❌  | OPDS 1.2 | — |
 
 ---
 
@@ -90,6 +91,7 @@ The server remains responsive during indexing and handles concurrent OPDS reques
   - [OPDS 1.2](https://specs.opds.io/opds-1.2)
   - [OPDS 2.0](https://specs.opds.io/opds-2.0)
 - **OPDS Page Streaming Extension**: [OPDS PSE 1.1](https://anansi-project.github.io/docs/opds-pse/specs/v1.1)
+- **Readium Web Publication Manifest**: [RWPM / DiViNa](https://readium.org/webpub-manifest/profiles/divina)
 - **Buy Me a Coffee**: [frederikb](https://www.buymeacoffee.com/frederikb)
 
 ---

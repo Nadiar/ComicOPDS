@@ -12,7 +12,7 @@ ComicOPDS focuses on being the best possible OPDS server for CBZ comics with Com
 - **Clean OPDS 1.2 implementation** - Standards-compliant feeds that work with all major OPDS clients
 - **Download support** - Direct CBZ file downloads with HTTP range support
 - **Full-text search** - Fast search across most ComicInfo.xml metadata fields
-- **Page streaming** - OPDS PSE 1.1 support for individual page access
+- **Page streaming** - OPDS PSE 1.1 for OPDS 1.2 clients, DiViNa manifests (Readium Web Publication Manifest) for OPDS 2.0 clients
 - **Thumbnail generation** - Cover extraction and caching from CBZ files
 
 ### Data Source
@@ -90,7 +90,7 @@ These features might be considered for future versions:
 - **Database optimizations** - If SQLite becomes a bottleneck
 
 ### OPDS Extensions
-- **Additional PSE features** - As the standard evolves
+- **Additional client streaming support** - As more clients adopt DiViNa/RWPM
 - **Enhanced search capabilities** - If clients supports them
 - **Better thumbnail handling** - Improved caching strategies
 

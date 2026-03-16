@@ -9,11 +9,12 @@ ComicOPDS exposes both user-facing endpoints (for OPDS clients and the dashboard
 | `/` | `GET` | Root OPDS catalog feed (same as `/opds`) |
 | `/opds` | `GET` | Root OPDS catalog feed. Supports browsing by folder and smart lists. |
 | `/opds?path=...` | `GET` | Browse into a subfolder (series, publisher, etc.). |
+| `/opds/v2/manifest?path=...` | `GET` | DiViNa manifest for OPDS 2.0 page streaming (Readium Web Publication Manifest). Returns `readingOrder` with per-page image links. |
 | `/opds/search.xml` | `GET` | [OpenSearch 1.1](https://opensearch.org/) descriptor. Tells OPDS clients how to search. |
 | `/opds/search?q=...&page=...` | `GET` | Perform a search query (returns OPDS feed of matching comics). |
 | `/download?path=...` | `GET` | Download a `.cbz` file. Supports HTTP range requests. |
 | `/stream?path=...` | `GET` | Stream a `.cbz` file (content-type `application/vnd.comicbook+zip`). |
-| `/pse/pages?path=...` | `GET` | OPDS PSE 1.1 page streaming (individual pages as images). Used by Panels and similar clients. |
+| `/pse/pages?path=...` | `GET` | OPDS PSE 1.1 page streaming feed (individual pages as images). Used by Panels and similar OPDS 1.2 clients. |
 | `/thumb?path=...` | `GET` | Get thumbnail image for a comic (JPEG format). |
 
 ### 📊 Dashboard & Stats
@@ -48,4 +49,15 @@ ComicOPDS exposes both user-facing endpoints (for OPDS clients and the dashboard
 
 - Admin and debug endpoints require Basic Auth unless `DISABLE_AUTH=true` is set.
 - OPDS endpoints automatically serve OPDS 1.2 or OPDS 2.0 based on the client's `Accept` header (content negotiation). This works transparently with any compliant OPDS 1.2/2.0 client.
+
+### 📄 Page Streaming Architecture
+
+ComicOPDS uses **different streaming protocols** depending on the OPDS version:
+
+| OPDS Version | Protocol | How It Works |
+|---|---|---|
+| OPDS 1.2 (Atom XML) | **OPDS PSE 1.1** | Entries include `<link rel="http://vaemendis.net/opds-pse/stream">` with `pse:count` attribute. Clients request pages from the PSE feed. |
+| OPDS 2.0 (JSON) | **DiViNa / RWPM** | Entries include a `self` link to a [Readium Web Publication Manifest](https://readium.org/webpub-manifest/profiles/divina) (`application/divina+json`). The manifest contains a `readingOrder` array with one link per page. |
+
+Both protocols use the same underlying `/pse/page` endpoint for actual page image delivery — only the discovery mechanism differs. PSE is an XML namespace extension and is not valid in JSON feeds; DiViNa manifests are the OPDS 2.0-native equivalent.
   

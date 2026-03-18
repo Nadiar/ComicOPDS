@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+markers = [
+    "unit: Unit tests for isolated functions",
+    "integration: Full end-to-end integration tests",
+    "auth: Authentication and authorization tests",
+    "opds1: OPDS 1.2 specification tests",
+    "opds2: OPDS 2.0 specification tests",
+    "pagination: Pagination functionality tests",
+]

@@ -358,8 +358,8 @@ def _split_query(q: str) -> Tuple[List[str], List[str]]:
 def _like_term(s: str) -> str:
     return f"%{s}%"
 
-def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
-    """Execute full-text search query against indexed content."""
+def _search_where(q: str) -> tuple[str, list]:
+    """Build WHERE clause and params for search queries."""
     words, years = _split_query(q)
     params: List[Any] = []
     where: List[str] = ["i.is_dir=0"]
@@ -386,11 +386,17 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
         where.append("(" + " OR ".join(["m.year=?" for _ in years]) + ")")
         params.extend(years)
 
+    return " AND ".join(where), params
+
+
+def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
+    """Execute full-text search query against indexed content."""
+    where_clause, params = _search_where(q)
     sql = f"""
     SELECT i.*, m.*
     FROM items i
     LEFT JOIN meta m ON m.rel = i.rel
-    WHERE {' AND '.join(where)}
+    WHERE {where_clause}
     ORDER BY
       COALESCE(m.series, i.name),
       CAST(COALESCE(NULLIF(m.number,''),'0') AS INTEGER),
@@ -402,37 +408,12 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
 
 def search_count(conn: sqlite3.Connection, q: str) -> int:
     """Get total count of full-text search results."""
-    words, years = _split_query(q)
-    params: List[Any] = []
-    where: List[str] = ["i.is_dir=0"]
-
-    if HAS_FTS5 and words:
-        match = " AND ".join([f"{w}*" for w in words])
-        where.append("i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)")
-        params.append(match)
-    elif words:
-        for w in words:
-            where.append("""
-            (
-              i.name LIKE ? OR
-              m.title LIKE ? OR
-              m.series LIKE ? OR
-              m.writer LIKE ? OR
-              m.publisher LIKE ?
-            )
-            """)
-            like = _like_term(w)
-            params.extend([like, like, like, like, like])
-
-    if years:
-        where.append("(" + " OR ".join(["m.year=?" for _ in years]) + ")")
-        params.extend(years)
-
+    where_clause, params = _search_where(q)
     row = conn.execute(f"""
         SELECT COUNT(*)
         FROM items i
         LEFT JOIN meta m ON m.rel = i.rel
-        WHERE {' AND '.join(where)}
+        WHERE {where_clause}
     """, params).fetchone()
     return int(row[0]) if row else 0
 

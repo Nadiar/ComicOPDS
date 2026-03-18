@@ -79,9 +79,16 @@ def client_with_comic(client, test_library_dir, test_db, monkeypatch):
     monkeypatch.setattr(db, "connect", mock_connect)
     monkeypatch.setattr(db, "DB_PATH", Path(test_db))
 
-    # Point LIBRARY_DIR to test library
+    # Point LIBRARY_DIR to test library in all modules that import it
     from app import main as main_mod
-    monkeypatch.setattr(main_mod, "LIBRARY_DIR", Path(test_library_dir))
+    from app import routes_opds as opds_mod
+    from app import feeds as feeds_mod
+    from app import config as config_mod
+    lib_path = Path(test_library_dir)
+    monkeypatch.setattr(main_mod, "LIBRARY_DIR", lib_path)
+    monkeypatch.setattr(opds_mod, "LIBRARY_DIR", lib_path)
+    monkeypatch.setattr(feeds_mod, "LIBRARY_DIR", lib_path)
+    monkeypatch.setattr(config_mod, "LIBRARY_DIR", lib_path)
 
     return client
 

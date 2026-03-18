@@ -596,61 +596,61 @@ class TestUnicodeEncoding:
 
 @pytest.mark.unit
 class TestTextNormalization:
-    """Tests for _normalize_text used during metadata ingestion."""
+    """Tests for normalize_text used during metadata ingestion."""
 
     def test_nfc_normalization(self):
         """NFD-composed characters are normalized to NFC."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         # NFD: 'e' + combining acute accent (U+0301)
         nfd = "e\u0301"
-        result = _normalize_text(nfd)
+        result = normalize_text(nfd)
         assert result == "\u00e9"  # NFC: single codepoint é
 
     def test_nfc_preserves_already_nfc(self):
         """NFC text passes through unchanged."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         nfc = "caf\u00e9"
-        assert _normalize_text(nfc) == "caf\u00e9"
+        assert normalize_text(nfc) == "caf\u00e9"
 
     def test_cp1252_smart_quotes_mapped(self):
         """Windows-1252 C1 control chars are mapped to proper Unicode."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         # 0x93 = left double quote in CP1252, 0x94 = right double quote
         text = "\x93Hello\x94"
-        result = _normalize_text(text)
+        result = normalize_text(text)
         assert result == "\u201cHello\u201d"
 
     def test_cp1252_em_dash_mapped(self):
         """Windows-1252 em dash (0x97) is mapped to U+2014."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         text = "Part One \x97 The Beginning"
-        result = _normalize_text(text)
+        result = normalize_text(text)
         assert result == "Part One \u2014 The Beginning"
 
     def test_cp1252_ellipsis_mapped(self):
         """Windows-1252 ellipsis (0x85) is mapped to U+2026."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         text = "To be continued\x85"
-        result = _normalize_text(text)
+        result = normalize_text(text)
         assert result == "To be continued\u2026"
 
     def test_replacement_chars_stripped(self):
         """Unicode replacement characters from decoding errors are removed."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         text = "Batman \ufffd Returns"
-        result = _normalize_text(text)
+        result = normalize_text(text)
         assert result == "Batman  Returns"
         assert "\ufffd" not in result
 
     def test_ascii_unchanged(self):
         """Plain ASCII text passes through unchanged."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         text = "Action Comics #1"
-        assert _normalize_text(text) == text
+        assert normalize_text(text) == text
 
     def test_real_world_characters(self):
         """Common Unicode characters found in comic metadata survive normalization."""
-        from app.main import _normalize_text
+        from app.scanning import normalize_text
         chars = {
             "\u2014": "\u2014",  # em dash
             "\u2018": "\u2018",  # left single quote
@@ -662,4 +662,4 @@ class TestTextNormalization:
             "\u00e9": "\u00e9",  # é
         }
         for inp, expected in chars.items():
-            assert _normalize_text(inp) == expected
+            assert normalize_text(inp) == expected

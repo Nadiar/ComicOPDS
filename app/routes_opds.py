@@ -97,11 +97,13 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
             search_href=f"{ob}/search.xml",
             start_href_override=ob,
             updated=updated_ts,
+            opds_prefix=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         entries_xml = [
-            entry_xml_from_row(r, dir_link_type=dir_link_types.get(r["rel"], OPDS_NAV_MEDIA))
+            entry_xml_from_row(r, dir_link_type=dir_link_types.get(r["rel"], OPDS_NAV_MEDIA),
+                               opds_prefix=ob)
             for r in rows
         ]
 
@@ -188,10 +190,11 @@ def opds_search(request: Request,
             search_href=f"{ob}/search.xml",
             start_href_override=ob,
             updated=updated_ts,
+            opds_prefix=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
-        entries_xml = [entry_xml_from_row(r) for r in rows]
+        entries_xml = [entry_xml_from_row(r, opds_prefix=ob) for r in rows]
         xml = feed(
             entries_xml,
             title=f"Search: {term}",
@@ -499,7 +502,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
             })
         feed_dict = feed_json(row_dicts, title="Smart Lists", self_href=f"{ob}/smart",
                                search_href=f"{ob}/search.xml", start_href_override=ob,
-                               updated=updated_ts)
+                               updated=updated_ts, opds_prefix=ob)
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
         tpl = env.get_template("entry.xml.j2")
@@ -581,10 +584,11 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
             search_href=f"{ob}/search.xml",
             start_href_override=ob,
             updated=updated_ts,
+            opds_prefix=ob,
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
-        entries_xml = [entry_xml_from_row(r) for r in rows]
+        entries_xml = [entry_xml_from_row(r, opds_prefix=ob) for r in rows]
         xml = feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href,
                    search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
         return xml_response(xml, headers=cache_hdrs)

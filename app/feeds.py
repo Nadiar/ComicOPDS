@@ -217,14 +217,15 @@ def _entry_data_from_row(row) -> dict[str, Any]:
 
 # -------------------- OPDS 1.2 XML entry/feed builders --------------------
 
-def entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA) -> str:
+def entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA,
+                       opds_prefix: str = "/opds") -> str:
     tpl = env.get_template("entry.xml.j2")
     base = SERVER_BASE.rstrip("/")
 
     if row["is_dir"]:
-        href = f"/opds?path={quote(row['rel'])}" if row["rel"] else "/opds"
+        href = f"{opds_prefix}?path={quote(row['rel'])}" if row["rel"] else opds_prefix
         return tpl.render(
-            entry_id=f"{base}{abs_url('/opds/' + quote(row['rel']))}",
+            entry_id=f"{base}{abs_url(opds_prefix + '/' + quote(row['rel']))}",
             updated=mtime_rfc3339(row["mtime"]),
             title=row["name"] or "/",
             is_dir=True,
@@ -287,10 +288,10 @@ def feed(entries_xml: List[str], title: str, self_href: str,
 
 # -------------------- OPDS 2.0 JSON entry/feed builders --------------------
 
-def entry_json_from_row(row) -> dict:
+def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
     base = SERVER_BASE.rstrip("/")
     if row["is_dir"]:
-        href = f"/opds?path={quote(row['rel'])}" if row["rel"] else "/opds"
+        href = f"{opds_prefix}?path={quote(row['rel'])}" if row["rel"] else opds_prefix
         return {
             "title": row["name"] or "/",
             "href": f"{base}{abs_url(href)}",
@@ -368,7 +369,8 @@ def feed_json(rows: list, title: str, self_href: str,
               os_items: Optional[int] = None,
               search_href: str = "/opds/search.xml",
               start_href_override: Optional[str] = None,
-              updated: Optional[str] = None) -> dict:
+              updated: Optional[str] = None,
+              opds_prefix: str = "/opds") -> dict:
 
     base = SERVER_BASE.rstrip("/")
     feed_dict = {
@@ -402,7 +404,7 @@ def feed_json(rows: list, title: str, self_href: str,
             feed_dict["navigation"].append({"title": r["title"], "href": r["href"], "type": "application/opds+json", "rel": "subsection"})
             continue
 
-        entry = entry_json_from_row(r)
+        entry = entry_json_from_row(r, opds_prefix=opds_prefix)
         if r.get("is_dir") if isinstance(r, dict) else r["is_dir"]:
             entry["rel"] = "subsection"
             feed_dict["navigation"].append(entry)

@@ -56,16 +56,23 @@ app.include_router(opds_router)
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     try:
-        app_logger.info(f"--> {request.method} {request.url.path}?{request.url.query}")
-        qp = dict(request.query_params)
-        if qp:
-            app_logger.info(f"    query: {qp}")
+        ua = request.headers.get("user-agent", "-")
+        accept = request.headers.get("accept", "-")
+        app_logger.info(
+            f"--> {request.method} {request.url.path}"
+            f"{'?' + str(request.url.query) if request.url.query else ''}"
+            f"  UA={ua}  Accept={accept}"
+        )
         app_logger.debug(f"    headers: {_mask_headers(dict(request.headers))}")
     except Exception:
         pass
     resp = await call_next(request)
     try:
-        app_logger.info(f"<-- {request.method} {request.url.path} {resp.status_code}")
+        ct = resp.headers.get("content-type", "-")
+        app_logger.info(
+            f"<-- {resp.status_code} {request.method} {request.url.path}"
+            f"  Content-Type={ct}"
+        )
     except Exception:
         pass
     return resp

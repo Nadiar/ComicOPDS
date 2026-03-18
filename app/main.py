@@ -655,7 +655,7 @@ def _entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA) -> str:
         thumb_href_abs = None
         image_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
             if p:
                 image_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
                 thumb_href_abs = image_abs
@@ -727,7 +727,7 @@ def _entry_json_from_row(row) -> dict:
         comicvine_issue = rget(row, "comicvineissue")
         thumb_href_abs = None
         if (rget(row, "ext") or "").lower() == "cbz":
-            p = have_thumb(rel, comicvine_issue)
+            p = have_thumb(rel, comicvine_issue) or generate_thumb(rel, abs_file, comicvine_issue)
             if p:
                 thumb_href_abs = f"{base}{_abs_url('/thumb?path=' + quote(rel))}"
 
@@ -1211,7 +1211,7 @@ def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), 
     resources = []
     cvid = rget(row, "comicvineissue")
     if (rget(row, "ext") or "").lower() == "cbz":
-        p = have_thumb(path, cvid)
+        p = have_thumb(path, cvid) or generate_thumb(path, abs_cbz, cvid)
         if p:
             resources.append({
                 "rel": "cover",

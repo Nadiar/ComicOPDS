@@ -38,7 +38,7 @@ These features will not be added to ComicOPDS. If you need them, consider other 
 
 > 💡 **Alternative**: Use [Komga](https://komga.org/), [Kometa](https://kometa.wiki/), or [Comixed](https://github.com/comixed/comixed) for reading progress features.
 
-### Multi-User Features  
+### Multi-User Features
 - **User accounts/authentication beyond Basic Auth** - ComicOPDS is inherently multi-user (no single-user features exist)
 - **Per-user libraries or permissions** - Everything is accessible to everyone with credentials
 - **Admin user management** - Basic Auth is the only supported authentication method
@@ -64,15 +64,15 @@ These features will not be added to ComicOPDS. If you need them, consider other 
 
 #### Why Use CBZ for Digital Comics (and Not CBR or PDF)
 
-**CBZ** (Comic Book Zip) is the most reliable and future-proof format for digital comics because it's simply a standard `.zip` archive containing sequential images (usually JPG or PNG). This makes it open, easy to manage, and compatible with virtually every comic reader across platforms.  
+**CBZ** (Comic Book Zip) is the most reliable and future-proof format for digital comics because it's simply a standard `.zip` archive containing sequential images (usually JPG or PNG). This makes it open, easy to manage, and compatible with virtually every comic reader across platforms.
 
-- **Open & Future-Proof**: ZIP is a universal, well-documented standard that's been around for decades and isn't going away.  
-- **Maximum Compatibility**: Works on all major comic readers, e-readers, and even basic image viewers. If needed, you can unzip and read pages directly.  
-- **Easy to Edit**: To fix or update a comic, just unzip, replace images, and re-zip. No special tools required.  
+- **Open & Future-Proof**: ZIP is a universal, well-documented standard that's been around for decades and isn't going away.
+- **Maximum Compatibility**: Works on all major comic readers, e-readers, and even basic image viewers. If needed, you can unzip and read pages directly.
+- **Easy to Edit**: To fix or update a comic, just unzip, replace images, and re-zip. No special tools required.
 
-By contrast:  
-- **CBR** uses the proprietary RAR format. It's less supported, harder to edit, and tied to a commercial license with little archival guarantee. On top of that, **RAR5** (the newer format) complicates things further since not all readers or extraction tools support it, leading to broken compatibility across platforms.  
-- **PDF** is bloated and overkill for comics. It often introduces recompression (hurting quality), doesn't scale well to different screen sizes, and is difficult to edit or convert later.  
+By contrast:
+- **CBR** uses the proprietary RAR format. It's less supported, harder to edit, and tied to a commercial license with little archival guarantee. On top of that, **RAR5** (the newer format) complicates things further since not all readers or extraction tools support it, leading to broken compatibility across platforms.
+- **PDF** is bloated and overkill for comics. It often introduces recompression (hurting quality), doesn't scale well to different screen sizes, and is difficult to edit or convert later.
 
 👉 For longevity, accessibility, and simplicity, **always choose CBZ**.
 
@@ -101,7 +101,7 @@ These features might be considered for future versions:
 ComicOPDS follows the Unix philosophy of "do one thing and do it well":
 
 1. **OPDS Server First** - Everything else is secondary to being an excellent OPDS implementation
-2. **ComicRack Integration** - Leverage existing tools rather than reinventing them  
+2. **ComicRack Integration** - Leverage existing tools rather than reinventing them
 3. **Simplicity Over Features** - Prefer simple, reliable functionality over complex features
 4. **Performance Focused** - Optimized for large libraries and fast response times
 5. **Standards Compliant** - Follow OPDS specifications for maximum compatibility
@@ -117,7 +117,7 @@ ComicOPDS is designed for a specific use case. If your needs don't match our sco
 - **[Kometa](https://kometa.wiki/)** - Media management with advanced features
 - **[Comixed](https://github.com/comixed/comixed)** - Java-based comic library manager
 
-### For Metadata Management  
+### For Metadata Management
 - **[ComicRack](https://github.com/maforget/ComicRackCE)** - The gold standard for comic organization and metadata
 - **[ComicTagger](https://github.com/comictagger/comictagger)** - Command-line metadata tool
 - **[Metron-Tagger](https://github.com/Metron-Project/metron-tagger)** - Command-line metadata tool for [metron.cloud](https://metron.cloud)

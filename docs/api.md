@@ -35,7 +35,7 @@ ComicOPDS exposes both user-facing endpoints (for OPDS clients and the dashboard
 | `/index/status` | `GET` | JSON status of current indexing task. |
 | `/thumbs/status` | `GET` | JSON status of current thumbnail caching task. |
 | `/thumbs/errors/log` | `GET` | Download the thumbnail extraction error log (`/data/thumbs_errors.log`). |
-| `/admin/pages/cleanup` | `POST` | Trigger manual cleanup of page-cache | 
+| `/admin/pages/cleanup` | `POST` | Trigger manual cleanup of page-cache |
 | `/pages/cache/status` | `GET` | Check page-cache size and statistics |
 
 ### 🧪 Debug Endpoints
@@ -60,4 +60,3 @@ ComicOPDS uses **different streaming protocols** depending on the OPDS version:
 | OPDS 2.0 (JSON) | **DiViNa / RWPM** | Entries include a `self` link to a [Readium Web Publication Manifest](https://readium.org/webpub-manifest/profiles/divina) (`application/divina+json`). The manifest contains a `readingOrder` array with one link per page. |
 
 Both protocols use the same underlying `/pse/page` endpoint for actual page image delivery — only the discovery mechanism differs. PSE is an XML namespace extension and is not valid in JSON feeds; DiViNa manifests are the OPDS 2.0-native equivalent.
-  

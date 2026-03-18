@@ -4,7 +4,7 @@
 
 > **Note:** This repository is an enhanced fork of the original [ComicOPDS by Frederik Baerentsen](https://gitea.baerentsen.space/FrederikBaerentsen/ComicOPDS). All credit for the core application goes to the original author. This community fork introduces several significant enhancements including full OPDS 2.0 support, background scanning, user administration, and trusted proxy support.
 
-ComicOPDS is a lightweight **OPDS 1.2 and OPDS 2.0** server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.  
+ComicOPDS is a lightweight **OPDS 1.2 and OPDS 2.0** server written in Python, designed for serving **CBZ comics** with metadata extracted from `ComicInfo.xml`.
 
 It's optimized for large libraries (10k–100k+ comics), supports FastAPI + SQLite + FTS5 search, thumbnail caching, and page streaming (OPDS PSE 1.1 for OPDS 1.2, DiViNa manifests for OPDS 2.0).
 
@@ -72,7 +72,7 @@ Works great with [Panels for iOS](https://panels.app) and other OPDS readers.
 
 ## 💪 Stress Test
 
-ComicOPDS has been stress tested using **170k+ CBZ files** generated using [CBZGenerator](https://gitea.baerentsen.space/FrederikBaerentsen/CBZGenerator). 
+ComicOPDS has been stress tested using **170k+ CBZ files** generated using [CBZGenerator](https://gitea.baerentsen.space/FrederikBaerentsen/CBZGenerator).
 
 **Performance Results:**
 - **Initial scan**: ~10 minutes for full library indexing

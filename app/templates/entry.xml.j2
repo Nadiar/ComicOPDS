@@ -6,7 +6,7 @@
   {% if is_dir %}
     <link rel="subsection"
           href="{{ href_abs }}"
-          type="application/atom+xml;profile=opds-catalog" />
+          type="{{ dir_link_type or 'application/atom+xml;profile=opds-catalog' }}" />
   {% else %}
     <!-- OPDS acquisition (download full book) -->
     <link rel="http://opds-spec.org/acquisition/open-access"

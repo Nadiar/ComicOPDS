@@ -90,6 +90,20 @@ def client_with_comic(client, test_library_dir, test_db, monkeypatch):
 class TestOPDS2PublicationLinks:
     """OPDS 2.0 publications must use DiViNa manifest, not PSE."""
 
+    def test_opds20_route_publication_has_self_link_to_manifest(self, client_with_comic, auth_headers):
+        """Explicit /opds20 route returns publications with a DiViNa self link."""
+        response = client_with_comic.get("/opds20?path=Test Series (2025)", headers=auth_headers)
+        assert response.status_code == 200
+
+        data = response.json()
+        pubs = data.get("publications", [])
+        assert len(pubs) >= 1
+
+        self_links = [l for l in pubs[0].get("links", []) if l.get("rel") == "self"]
+        assert len(self_links) == 1
+        assert self_links[0]["type"] == "application/divina+json"
+        assert "/opds/v2/manifest" in self_links[0]["href"]
+
     def test_publication_has_self_link_to_manifest(self, client_with_comic, auth_headers, opds2_headers):
         """OPDS 2.0 publication has a self link pointing to a DiViNa manifest."""
         headers = {**auth_headers, **opds2_headers}
@@ -318,7 +332,22 @@ class TestDiViNaManifest:
         response = client_with_comic.get(
             "/opds/v2/manifest?path=nonexistent.cbz", headers=auth_headers
         )
+
         assert response.status_code == 404
+
+    def test_opds20_self_link_resolves_to_manifest(self, client_with_comic, auth_headers):
+        """The manifest self link emitted in /opds20 is fetchable."""
+        feed_response = client_with_comic.get("/opds20?path=Test Series (2025)", headers=auth_headers)
+        assert feed_response.status_code == 200
+
+        data = feed_response.json()
+        pubs = data.get("publications", [])
+        assert len(pubs) >= 1
+        self_link = next(l for l in pubs[0]["links"] if l.get("rel") == "self")
+
+        manifest_response = client_with_comic.get(self_link["href"].replace("http://testserver", ""), headers=auth_headers)
+        assert manifest_response.status_code == 200
+        assert "divina+json" in manifest_response.headers.get("content-type", "")
 
     def test_manifest_for_non_cbz_returns_404(self, client_with_comic, auth_headers):
         """Requesting manifest for a non-CBZ file returns 404."""

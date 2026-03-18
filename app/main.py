@@ -6,12 +6,14 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
 import unicodedata
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from math import ceil
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -66,6 +68,8 @@ env = Environment(
 )
 
 OPDS_XML_MEDIA = "application/atom+xml;profile=opds-catalog;charset=utf-8"
+OPDS_NAV_MEDIA = "application/atom+xml;profile=opds-catalog;kind=navigation"
+OPDS_ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 
 def _xml_response(xml: str, headers: dict | None = None,
                   media_type: str = OPDS_XML_MEDIA) -> Response:
@@ -158,6 +162,43 @@ def rget(row, key: str, default=None):
 
 def _abs_url(p: str) -> str:
     return (URL_PREFIX + p) if URL_PREFIX else p
+
+def _opds_media_type(kind: str) -> str:
+    return OPDS_ACQ_MEDIA if kind == "acquisition" else OPDS_NAV_MEDIA
+
+@lru_cache(maxsize=1)
+def _git_commit() -> Optional[str]:
+    for name in ("GIT_COMMIT", "SOURCE_COMMIT", "COMMIT_SHA", "GITHUB_SHA"):
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value[:12]
+
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--short=12", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception:
+        return None
+
+    if result.returncode == 0:
+        commit = (result.stdout or "").strip()
+        return commit or None
+    return None
+
+def _build_info() -> dict[str, Any]:
+    return {
+        "commit": _git_commit(),
+        "server_base": SERVER_BASE,
+        "url_prefix": URL_PREFIX,
+        "opds2_manifest_path": _abs_url("/opds/v2/manifest"),
+    }
+
+def _health_payload() -> dict[str, Any]:
+    return {"ok": True, **_build_info()}
 
 def _opds_cache_headers(last_mod: float, request: Request | None = None) -> dict | None:
     """HTTP caching headers for OPDS feed responses.
@@ -424,6 +465,9 @@ def startup():
         conn.close()
     app_logger.info(f"SQLite version: {sqlite_version}")
     app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
+    build = _build_info()
+    app_logger.info(f"Build commit: {build['commit'] or 'unknown'}")
+    app_logger.info(f"OPDS 2 manifest path: {build['opds2_manifest_path']}")
 
     app_logger.info("=== ComicOPDS Configuration ===")
     app_logger.info(f"  Library dir: {LIBRARY_DIR}")
@@ -558,7 +602,10 @@ def _feed(entries_xml: List[str], title: str, self_href: str,
           os_items: Optional[int] = None,
           search_href: str = "/opds/search.xml",
           start_href_override: Optional[str] = None,
-          updated: Optional[str] = None):
+          updated: Optional[str] = None,
+          self_type: str = OPDS_NAV_MEDIA,
+          start_type: str = OPDS_NAV_MEDIA,
+          next_type: Optional[str] = None):
     tpl = env.get_template("feed.xml.j2")
     base = SERVER_BASE.rstrip("/")
     return tpl.render(
@@ -570,13 +617,16 @@ def _feed(entries_xml: List[str], title: str, self_href: str,
         search_href=_abs_url(search_href),
         base=base,
         next_href=_abs_url(next_href) if next_href else None,
+        self_type=self_type,
+        start_type=start_type,
+        next_type=next_type or self_type,
         entries=entries_xml,
         os_total=os_total,
         os_start=os_start,
         os_items=os_items,
     )
 
-def _entry_xml_from_row(row) -> str:
+def _entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA) -> str:
     tpl = env.get_template("entry.xml.j2")
     base = SERVER_BASE.rstrip("/")
 
@@ -588,6 +638,7 @@ def _entry_xml_from_row(row) -> str:
             title=row["name"] or "/",
             is_dir=True,
             href_abs=f"{base}{_abs_url(href)}",
+            dir_link_type=dir_link_type,
         )
     else:
         rel = row["rel"]
@@ -797,7 +848,11 @@ def _feed_json(rows: list, title: str, self_href: str,
 # -------------------- Routes --------------------
 @app.get("/healthz")
 def health():
-    return PlainTextResponse("ok")
+    return JSONResponse(_health_payload())
+
+@app.get("/debug/build", response_class=JSONResponse)
+def debug_build(_=Depends(require_basic)):
+    return JSONResponse(_build_info())
 
 @app.get("/opds", response_class=Response)
 @app.get("/opds12", response_class=Response)
@@ -810,6 +865,11 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         start = (page - 1) * PAGE_SIZE
         rows = db.children_page(conn, path, PAGE_SIZE, start)
         last_mod = db.last_modified(conn)
+        feed_kind = db.feed_kind(conn, path)
+        dir_link_types = {
+            r["rel"]: _opds_media_type(db.feed_kind(conn, r["rel"]))
+            for r in rows if int(r["is_dir"]) == 1
+        }
     finally:
         conn.close()
 
@@ -849,7 +909,10 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         )
         return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
     else:
-        entries_xml = [_entry_xml_from_row(r) for r in rows]
+        entries_xml = [
+            _entry_xml_from_row(r, dir_link_type=dir_link_types.get(r["rel"], OPDS_NAV_MEDIA))
+            for r in rows
+        ]
 
         # "Smart Lists" virtual folder at root/page 1
         if path == "" and page == 1:
@@ -862,11 +925,14 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
                 title="📁 Smart Lists",
                 is_dir=True,
                 href_abs=f"{base}{smart_href}",
+                dir_link_type=OPDS_NAV_MEDIA,
             )
             entries_xml = [smart_entry] + entries_xml
 
         xml = _feed(entries_xml, title=f"/{path}" if path else "Library", self_href=self_href, next_href=next_href,
-                   search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
+                   search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts,
+                   self_type=_opds_media_type(feed_kind), start_type=OPDS_NAV_MEDIA,
+                   next_type=_opds_media_type(feed_kind))
         return _xml_response(xml, headers=cache_hdrs)
 
 @app.get("/", response_class=Response)
@@ -945,6 +1011,9 @@ def opds_search(request: Request,
             search_href=f"{ob}/search.xml",
             start_href_override=ob,
             updated=updated_ts,
+            self_type=OPDS_ACQ_MEDIA,
+            start_type=OPDS_NAV_MEDIA,
+            next_type=OPDS_ACQ_MEDIA,
         )
         return _xml_response(xml, headers=cache_hdrs)
 

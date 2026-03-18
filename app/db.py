@@ -296,6 +296,40 @@ def children_page(conn: sqlite3.Connection, path: str, limit: int, offset: int):
         sql = sql_base + " WHERE i.parent=? ORDER BY i.is_dir DESC, i.name LIMIT ? OFFSET ?"
         return conn.execute(sql, (path, limit, offset)).fetchall()
 
+def feed_kind(conn: sqlite3.Connection, path: str) -> str:
+    """Classify a feed as navigation or acquisition based on its direct children.
+
+    A folder containing only file entries is an acquisition feed. All other cases,
+    including empty or mixed folders, are treated as navigation feeds for safety.
+    """
+    if path == "":
+        row = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN is_dir=1 THEN 1 ELSE 0 END) AS dir_count,
+              SUM(CASE WHEN is_dir=0 THEN 1 ELSE 0 END) AS file_count
+            FROM items
+            WHERE parent=''
+            """
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT
+              SUM(CASE WHEN is_dir=1 THEN 1 ELSE 0 END) AS dir_count,
+              SUM(CASE WHEN is_dir=0 THEN 1 ELSE 0 END) AS file_count
+            FROM items
+            WHERE parent=?
+            """,
+            (path,),
+        ).fetchone()
+
+    dir_count = int(row["dir_count"] or 0) if row else 0
+    file_count = int(row["file_count"] or 0) if row else 0
+    if file_count > 0 and dir_count == 0:
+        return "acquisition"
+    return "navigation"
+
 def get_item(conn: sqlite3.Connection, rel: str):
     return conn.execute("""
         SELECT i.*, m.*

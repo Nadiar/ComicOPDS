@@ -55,3 +55,48 @@ class TestAdminEndpoints:
         except:
             # If not JSON, just verify it's a string response
             assert isinstance(response.text, str)
+
+    def test_health_check_includes_build_info(self, client_with_data, monkeypatch):
+        """GET /healthz includes commit and route diagnostics."""
+        from app import main as main_mod
+
+        monkeypatch.setattr(
+            main_mod,
+            "_build_info",
+            lambda: {
+                "commit": "abc123def456",
+                "server_base": "https://example.test",
+                "url_prefix": "",
+                "opds2_manifest_path": "/opds/v2/manifest",
+            },
+        )
+
+        response = client_with_data.get("/healthz")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["ok"] is True
+        assert data["commit"] == "abc123def456"
+        assert data["opds2_manifest_path"] == "/opds/v2/manifest"
+
+    def test_debug_build_returns_build_info(self, client_with_data, auth_headers, monkeypatch):
+        """GET /debug/build exposes commit and route diagnostics."""
+        from app import main as main_mod
+
+        monkeypatch.setattr(
+            main_mod,
+            "_build_info",
+            lambda: {
+                "commit": "abc123def456",
+                "server_base": "https://example.test",
+                "url_prefix": "/comics",
+                "opds2_manifest_path": "/comics/opds/v2/manifest",
+            },
+        )
+
+        response = client_with_data.get("/debug/build", headers=auth_headers)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["commit"] == "abc123def456"
+        assert data["url_prefix"] == "/comics"

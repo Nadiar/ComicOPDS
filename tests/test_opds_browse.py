@@ -79,3 +79,28 @@ class TestOPDS1Browse:
         response = client_with_data.get("/opds?path=Series", headers=headers)
 
         assert response.status_code == 200
+
+    def test_navigation_entries_use_target_feed_kind(self, client_with_data, auth_headers, opds1_headers):
+        """Directory links advertise the target feed kind for reader compatibility."""
+        headers = {**auth_headers, **opds1_headers}
+        response = client_with_data.get("/opds?path=Series", headers=headers)
+
+        root = ET.fromstring(response.content)
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
+        entries = root.findall('atom:entry', ns)
+        links = [entry.find('atom:link', ns) for entry in entries]
+        types = [link.get('type') for link in links if link is not None]
+
+        assert types
+        assert all(t == 'application/atom+xml;profile=opds-catalog;kind=acquisition' for t in types)
+
+    def test_acquisition_feed_self_link_has_acquisition_kind(self, client_with_data, auth_headers, opds1_headers):
+        """A series folder with only files advertises itself as an acquisition feed."""
+        headers = {**auth_headers, **opds1_headers}
+        response = client_with_data.get('/opds?path=Series/Amazing%20Spider-Man', headers=headers)
+
+        root = ET.fromstring(response.content)
+        ns = {'atom': 'http://www.w3.org/2005/Atom'}
+        self_link = next(link for link in root.findall('atom:link', ns) if link.get('rel') == 'self')
+
+        assert self_link.get('type') == 'application/atom+xml;profile=opds-catalog;kind=acquisition'

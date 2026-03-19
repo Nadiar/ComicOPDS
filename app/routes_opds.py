@@ -21,7 +21,7 @@ from .feeds import (
 )
 from .opds import now_rfc3339, mtime_rfc3339, mime_for
 from .page_cache import cbz_list_pages, book_cache_dir, ensure_page_jpeg
-from .routes_admin import _load_smartlists
+from .routes_admin import _load_smartlists, SMARTLISTS_PATH
 from .thumbs import have_thumb, generate_thumb
 
 logger = logging.getLogger("comicopds")
@@ -627,6 +627,12 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
         last_mod = db.last_modified(conn)
     finally:
         conn.close()
+    # Include smartlists.json mtime so edits invalidate the cache
+    try:
+        sl_mtime = SMARTLISTS_PATH.stat().st_mtime
+        last_mod = max(last_mod, sl_mtime)
+    except OSError:
+        pass
     cache_hdrs = opds_cache_headers(last_mod, request)
     if cache_hdrs is None:
         return Response(status_code=304)
@@ -699,6 +705,12 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     finally:
         conn.close()
 
+    # Include smartlists.json mtime so sort/filter edits invalidate the cache
+    try:
+        sl_mtime = SMARTLISTS_PATH.stat().st_mtime
+        last_mod = max(last_mod, sl_mtime)
+    except OSError:
+        pass
     cache_hdrs = opds_cache_headers(last_mod, request)
     if cache_hdrs is None:
         return Response(status_code=304)

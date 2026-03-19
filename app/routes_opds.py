@@ -627,12 +627,7 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
         last_mod = db.last_modified(conn)
     finally:
         conn.close()
-    # Include smartlists.json mtime so edits invalidate the cache
-    try:
-        sl_mtime = SMARTLISTS_PATH.stat().st_mtime
-        last_mod = max(last_mod, sl_mtime)
-    except OSError:
-        pass
+    last_mod = _smartlist_cache_mod(last_mod)
     cache_hdrs = opds_cache_headers(last_mod, request)
     if cache_hdrs is None:
         return Response(status_code=304)
@@ -673,6 +668,24 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
                    updated=updated_ts)
         return xml_response(xml, headers=cache_hdrs)
 
+def _smartlist_cache_mod(last_mod: float) -> float:
+    """Include smartlists.json mtime so edits invalidate the cache."""
+    try:
+        sl_mtime = SMARTLISTS_PATH.stat().st_mtime
+        return max(last_mod, sl_mtime)
+    except OSError:
+        return last_mod
+
+
+def _vol_label(series: str, volume: str) -> str:
+    """Format a virtual volume folder name: 'Series (Volume)' or just 'Series'."""
+    if not series:
+        return "(No Series)"
+    if volume:
+        return f"{series} ({volume})"
+    return series
+
+
 @router.get("/opds/smart/{slug}", response_class=Response)
 @router.get("/opds12/smart/{slug}", response_class=Response)
 @router.get("/opds20/smart/{slug}", response_class=Response)
@@ -684,11 +697,66 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
 
     groups = sl.get("groups") or []
     sort = (sl.get("sort") or "issued_desc").lower()
+    group_by = (sl.get("group_by") or "").strip().lower()
 
     distinct_by   = (sl.get("distinct_by") or "").strip().lower()
     distinct_mode = (sl.get("distinct_mode") or "latest").strip().lower()
     distinct_flag = distinct_mode if distinct_by == "series_volume" else False
 
+    # ---- group_by=series_volume → show virtual folders ----
+    if group_by == "series_volume":
+        conn = db.connect()
+        try:
+            vols = db.smartlist_volumes(conn, groups)
+            last_mod = db.last_modified(conn)
+        finally:
+            conn.close()
+
+        last_mod = _smartlist_cache_mod(last_mod)
+        cache_hdrs = opds_cache_headers(last_mod, request)
+        if cache_hdrs is None:
+            return Response(status_code=304)
+        updated_ts = mtime_rfc3339(last_mod)
+
+        ob = opds_base(request)
+        base = SERVER_BASE.rstrip("/")
+        is_opds2 = prefers_opds2(request)
+
+        if is_opds2:
+            nav_items = []
+            for v in vols:
+                label = _vol_label(v["series"], v["volume"])
+                href = f"{ob}/smart/{quote(slug)}/vol?series={quote(v['series'], safe='')}&volume={quote(v['volume'], safe='')}"
+                nav_items.append({
+                    "is_smart": True,
+                    "title": f"{label} ({v['issue_count']})",
+                    "href": f"{base}{abs_url(href)}",
+                })
+            feed_dict = feed_json(nav_items, title=sl["name"],
+                                   self_href=f"{ob}/smart/{quote(slug)}",
+                                   search_href=f"{ob}/search.xml", start_href_override=ob,
+                                   updated=updated_ts, opds_prefix=ob)
+            return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
+        else:
+            tpl = env.get_template("entry.xml.j2")
+            entries = []
+            for v in vols:
+                label = _vol_label(v["series"], v["volume"])
+                href = f"{ob}/smart/{quote(slug)}/vol?series={quote(v['series'], safe='')}&volume={quote(v['volume'], safe='')}"
+                entries.append(tpl.render(
+                    entry_id=f"{base}{abs_url(href)}",
+                    updated=updated_ts,
+                    title=f"{label} ({v['issue_count']})",
+                    is_dir=True,
+                    href_abs=f"{base}{abs_url(href)}",
+                ))
+            xml = feed(entries, title=sl["name"],
+                       self_href=f"{ob}/smart/{quote(slug)}",
+                       search_href=f"{ob}/search.xml", start_href_override=ob,
+                       updated=updated_ts)
+            return xml_response(xml, headers=cache_hdrs)
+
+    # ---- flat issue list (default) ----
     sl_limit = int(sl.get("limit") or 0)
 
     page = max(1, int(page))
@@ -705,12 +773,7 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     finally:
         conn.close()
 
-    # Include smartlists.json mtime so sort/filter edits invalidate the cache
-    try:
-        sl_mtime = SMARTLISTS_PATH.stat().st_mtime
-        last_mod = max(last_mod, sl_mtime)
-    except OSError:
-        pass
+    last_mod = _smartlist_cache_mod(last_mod)
     cache_hdrs = opds_cache_headers(last_mod, request)
     if cache_hdrs is None:
         return Response(status_code=304)
@@ -746,5 +809,75 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
     else:
         entries_xml = [entry_xml_from_row(r, opds_prefix=ob) for r in rows]
         xml = feed(entries_xml, title=sl["name"], self_href=self_href, next_href=next_href,
+                   search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
+        return xml_response(xml, headers=cache_hdrs)
+
+
+@router.get("/opds/smart/{slug}/vol", response_class=Response)
+@router.get("/opds12/smart/{slug}/vol", response_class=Response)
+@router.get("/opds20/smart/{slug}/vol", response_class=Response)
+def opds_smart_list_volume(
+    request: Request,
+    slug: str,
+    series: str = Query("", description="Series name"),
+    volume: str = Query("", description="Volume identifier"),
+    page: int = 1,
+    _=Depends(require_basic),
+):
+    """Show issues for a specific series+volume within a smart list."""
+    lists = _load_smartlists()
+    sl = next((x for x in lists if x.get("slug") == slug), None)
+    if not sl:
+        raise HTTPException(404, "Smart list not found")
+
+    groups = sl.get("groups") or []
+    sort = (sl.get("sort") or "issued_desc").lower()
+
+    page = max(1, int(page))
+    page_size = PAGE_SIZE
+    start = (page - 1) * page_size
+
+    conn = db.connect()
+    try:
+        rows = db.smartlist_query_for_volume(conn, groups, series, volume, sort, page_size, start)
+        total = db.smartlist_count_for_volume(conn, groups, series, volume)
+        last_mod = db.last_modified(conn)
+    finally:
+        conn.close()
+
+    last_mod = _smartlist_cache_mod(last_mod)
+    cache_hdrs = opds_cache_headers(last_mod, request)
+    if cache_hdrs is None:
+        return Response(status_code=304)
+    updated_ts = mtime_rfc3339(last_mod)
+
+    ob = opds_base(request)
+    vol_label = _vol_label(series, volume)
+    qs = f"series={quote(series, safe='')}&volume={quote(volume, safe='')}"
+    self_href = f"{ob}/smart/{quote(slug)}/vol?{qs}&page={page}"
+    next_href = f"{ob}/smart/{quote(slug)}/vol?{qs}&page={page+1}" if (start + len(rows)) < total else None
+    prev_href = f"{ob}/smart/{quote(slug)}/vol?{qs}&page={page-1}" if page > 1 else None
+
+    is_opds2 = prefers_opds2(request)
+    if is_opds2:
+        row_dicts = [dict(r) for r in rows]
+        feed_dict = feed_json(
+            row_dicts,
+            title=vol_label,
+            self_href=self_href,
+            next_href=next_href,
+            prev_href=prev_href,
+            os_total=total,
+            os_start=start + 1 if total > 0 else 0,
+            os_items=PAGE_SIZE,
+            search_href=f"{ob}/search.xml",
+            start_href_override=ob,
+            updated=updated_ts,
+            opds_prefix=ob,
+        )
+        return JSONResponse(content=feed_dict, media_type="application/opds+json", headers=cache_hdrs)
+    else:
+        entries_xml = [entry_xml_from_row(r, opds_prefix=ob) for r in rows]
+        xml = feed(entries_xml, title=vol_label, self_href=self_href, next_href=next_href,
                    search_href=f"{ob}/search.xml", start_href_override=ob, updated=updated_ts)
         return xml_response(xml, headers=cache_hdrs)

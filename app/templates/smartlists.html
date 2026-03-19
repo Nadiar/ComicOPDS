@@ -74,6 +74,16 @@
                 </div>
               </div>
             </div>
+            <div class="row g-2 mt-1">
+              <div class="col-12 col-md-4">
+                <label class="form-label">Group by</label>
+                <select id="groupBy" class="form-select">
+                  <option value="">None (flat list)</option>
+                  <option value="series_volume">Series + Volume folders</option>
+                </select>
+                <div class="form-text">Show virtual folders like "Batman (2016)"</div>
+              </div>
+            </div>
 
             <div class="d-flex gap-2 mt-4">
               <button class="btn btn-primary" id="saveList"><i class="bi bi-save me-1"></i>Save list</button>
@@ -196,6 +206,7 @@
       distinctBySel.value = '';
       distinctModeWrap.style.display = 'none';
       document.getElementById('dmLatest').checked = true;
+      document.getElementById('groupBy').value = '';
       groupsEl.innerHTML = '';
       addGroup({rules:[{field:'series',op:'contains',value:''}]});
     }
@@ -216,7 +227,7 @@
                 <div class="small text-secondary">
                   ${(l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' "'+String(r.value||'').replace(/"/g,'&quot;')+'"').join(' AND ')).join(' <b>OR</b> ') || '—'}
                 </div>
-                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${distinctTxt}</div>
+                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${distinctTxt}${l.group_by ? ' • Group: ' + l.group_by : ''}</div>
                 <div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/opds/smart/${l.slug}">Open in OPDS</a></div>
               </div>
               <div class="btn-group btn-group-sm">
@@ -232,6 +243,7 @@
           distinctBySel.value = l.distinct_by || '';
           distinctModeWrap.style.display = (distinctBySel.value === 'series_volume') ? '' : 'none';
           (l.distinct_mode === 'oldest' ? document.getElementById('dmOldest') : document.getElementById('dmLatest')).checked = true;
+          document.getElementById('groupBy').value = l.group_by || '';
           groupsEl.innerHTML = '';
           (l.groups || []).forEach(g => addGroup(g));
         };
@@ -268,11 +280,12 @@
       const limit = parseInt(document.getElementById('limit').value || '0', 10);
       const distinct_by = distinctBySel.value; // '' or 'series_volume'
       const distinct_mode = document.querySelector('input[name="distinctMode"]:checked').value; // latest|oldest
+      const group_by = document.getElementById('groupBy').value; // '' or 'series_volume'
 
       const lists = await loadLists();
       const slug = (name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'list');
       const existing = lists.find(l => l.slug === slug) || lists.find(l => l.name === name);
-      const record = { name, slug, groups, sort, limit, distinct_by, distinct_mode };
+      const record = { name, slug, groups, sort, limit, distinct_by, distinct_mode, group_by };
       if (existing) Object.assign(existing, record); else lists.push(record);
       await saveLists(lists);
       resetForm();

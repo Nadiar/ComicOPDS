@@ -700,6 +700,75 @@ def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> i
     """, (*params, *fts_params)).fetchone()
     return int(row[0]) if row else 0
 
+
+def smartlist_volumes(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> list:
+    """Return distinct (series, volume, count) combos matching smart list filters.
+
+    Used for group_by=series_volume to render virtual folders.
+    Sorted by series name, then volume.
+    """
+    where, params = build_smartlist_where(groups)
+    fts_sql, fts_params = _build_fts_prefilter(groups)
+    rows = conn.execute(f"""
+        SELECT COALESCE(m.series, '') AS series,
+               COALESCE(m.volume, '') AS volume,
+               COUNT(*) AS issue_count
+          FROM items i
+          LEFT JOIN meta m ON m.rel = i.rel
+         WHERE i.is_dir=0 AND {where}{fts_sql}
+         GROUP BY COALESCE(m.series, ''), COALESCE(m.volume, '')
+         ORDER BY COALESCE(m.series, ''),
+                  CAST(COALESCE(NULLIF(m.volume,''),'0') AS INTEGER),
+                  COALESCE(m.volume, '')
+    """, (*params, *fts_params)).fetchall()
+    return rows
+
+
+def smartlist_query_for_volume(
+    conn: sqlite3.Connection,
+    groups: List[Dict[str, Any]],
+    series: str,
+    volume: str,
+    sort: str,
+    limit: int,
+    offset: int,
+):
+    """Query smart list results filtered to a specific series+volume."""
+    where, params = build_smartlist_where(groups)
+    fts_sql, fts_params = _build_fts_prefilter(groups)
+    order_clause = _order_by_for_sort(sort)
+    sql = f"""
+        SELECT i.rowid AS id, i.*, m.*
+          FROM items i
+          LEFT JOIN meta m ON m.rel = i.rel
+         WHERE i.is_dir=0 AND {where}{fts_sql}
+           AND COALESCE(m.series, '') = ?
+           AND COALESCE(m.volume, '') = ?
+         ORDER BY {order_clause}
+         LIMIT ? OFFSET ?
+    """
+    return conn.execute(sql, (*params, *fts_params, series, volume, limit, offset)).fetchall()
+
+
+def smartlist_count_for_volume(
+    conn: sqlite3.Connection,
+    groups: List[Dict[str, Any]],
+    series: str,
+    volume: str,
+) -> int:
+    """Count smart list results for a specific series+volume."""
+    where, params = build_smartlist_where(groups)
+    fts_sql, fts_params = _build_fts_prefilter(groups)
+    row = conn.execute(f"""
+        SELECT COUNT(*)
+          FROM items i
+          LEFT JOIN meta m ON m.rel = i.rel
+         WHERE i.is_dir=0 AND {where}{fts_sql}
+           AND COALESCE(m.series, '') = ?
+           AND COALESCE(m.volume, '') = ?
+    """, (*params, *fts_params, series, volume)).fetchone()
+    return int(row[0]) if row else 0
+
 # ----------------------------- Stats ------------------------------------------
 
 def stats(conn: sqlite3.Connection) -> Dict[str, Any]:

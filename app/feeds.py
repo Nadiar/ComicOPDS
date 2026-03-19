@@ -339,7 +339,7 @@ def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
                 "type": "application/divina+json"
             },
             {
-                "rel": "http://opds-spec.org/acquisition",
+                "rel": "http://opds-spec.org/acquisition/open-access",
                 "href": f"{base}{abs_url(d['download_href'])}",
                 "type": d["mime"]
             },

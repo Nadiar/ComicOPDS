@@ -621,7 +621,7 @@ def book_manifest(item_id: int, user: str = Depends(require_basic)):
 @router.get("/opds12/smart", response_class=Response)
 @router.get("/opds20/smart", response_class=Response)
 def opds_smart_lists(request: Request, _=Depends(require_basic)):
-    lists = _load_smartlists()
+    lists = sorted(_load_smartlists(), key=lambda x: (x.get("name") or "").lower())
     conn = db.connect()
     try:
         last_mod = db.last_modified(conn)

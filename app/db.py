@@ -285,7 +285,7 @@ def children_count(conn: sqlite3.Connection, path: str) -> int:
 
 def children_page(conn: sqlite3.Connection, path: str, limit: int, offset: int):
     sql_base = """
-        SELECT i.*, m.*
+        SELECT i.rowid AS id, i.*, m.*
         FROM items i
         LEFT JOIN meta m ON m.rel = i.rel
     """
@@ -332,11 +332,21 @@ def feed_kind(conn: sqlite3.Connection, path: str) -> str:
 
 def get_item(conn: sqlite3.Connection, rel: str):
     return conn.execute("""
-        SELECT i.*, m.*
+        SELECT i.rowid AS id, i.*, m.*
         FROM items i
         LEFT JOIN meta m ON m.rel = i.rel
         WHERE i.rel=?
     """, (rel,)).fetchone()
+
+
+def get_item_by_id(conn: sqlite3.Connection, item_id: int):
+    """Look up an item by its SQLite rowid."""
+    return conn.execute("""
+        SELECT i.rowid AS id, i.*, m.*
+        FROM items i
+        LEFT JOIN meta m ON m.rel = i.rel
+        WHERE i.rowid=?
+    """, (item_id,)).fetchone()
 
 def last_modified(conn: sqlite3.Connection) -> float:
     """Get the timestamp of the most recently modified item in the database."""
@@ -393,7 +403,7 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
     """Execute full-text search query against indexed content."""
     where_clause, params = _search_where(q)
     sql = f"""
-    SELECT i.*, m.*
+    SELECT i.rowid AS id, i.*, m.*
     FROM items i
     LEFT JOIN meta m ON m.rel = i.rel
     WHERE {where_clause}
@@ -630,7 +640,7 @@ def smartlist_query(  # pylint: disable=too-many-branches
 
     if not use_distinct:
         sql = f"""
-        SELECT i.*, m.*
+        SELECT i.rowid AS id, i.*, m.*
           FROM items i
           LEFT JOIN meta m ON m.rel = i.rel
          WHERE i.is_dir=0 AND {where}{fts_sql}
@@ -657,7 +667,7 @@ def smartlist_query(  # pylint: disable=too-many-branches
     """
 
     sql = f"""
-    SELECT i.*, m.*
+    SELECT i.rowid AS id, i.*, m.*
       FROM items i
       LEFT JOIN meta m ON m.rel = i.rel
      WHERE i.is_dir=0 AND {where}{fts_sql}

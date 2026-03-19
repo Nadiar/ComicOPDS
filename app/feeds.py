@@ -173,27 +173,37 @@ def _entry_data_from_row(row) -> dict[str, Any]:
     base = SERVER_BASE.rstrip("/")
     rel = row["rel"]
     abs_file = LIBRARY_DIR / rel
+    item_id = rget(row, "id")
 
-    download_href = f"/download?path={quote(rel)}"
-    stream_href = f"/stream?path={quote(rel)}"
-    manifest_href = f"/opds/v2/manifest?path={quote(rel)}"
+    # ID-based URLs (no path encoding issues)
+    if item_id is not None:
+        download_href = f"/book/{item_id}/download"
+        stream_href = f"/book/{item_id}/download"
+        manifest_href = f"/book/{item_id}/manifest"
+        thumb_path = f"/book/{item_id}/thumb"
+        pse_template = f"/book/{item_id}/page/{{pageNumber}}"
+    else:
+        # Fallback for rows without id (e.g. tests with plain dicts)
+        download_href = f"/download?path={quote(rel)}"
+        stream_href = f"/stream?path={quote(rel)}"
+        manifest_href = f"/opds/v2/manifest?path={quote(rel)}"
+        thumb_path = f"/thumb?path={quote(rel)}"
+        pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
 
-    pse_template = f"/pse/page?path={quote(rel)}&page={{pageNumber}}"
     page_count = int(rget(row, "page_count") or 0)
 
     comicvine_issue = rget(row, "comicvineissue")
     thumb_href_abs = None
     image_abs = None
     if (rget(row, "ext") or "").lower() == "cbz":
-        # Always emit the thumbnail URL — the /thumb endpoint generates on demand.
-        # This avoids blocking feed generation on synchronous PIL processing.
-        image_abs = f"{base}{abs_url('/thumb?path=' + quote(rel))}"
+        image_abs = f"{base}{abs_url(thumb_path)}"
         thumb_href_abs = image_abs
 
     return {
         "rel": rel,
         "abs_file": abs_file,
         "base": base,
+        "id": item_id,
         "title": display_title(row),
         "authors": authors_from_row(row),
         "issued": issued_from_row(row),

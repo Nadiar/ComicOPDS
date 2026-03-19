@@ -109,7 +109,7 @@ class TestOPDS2PublicationLinks:
         self_links = [l for l in pubs[0].get("links", []) if l.get("rel") == "self"]
         assert len(self_links) == 1
         assert self_links[0]["type"] == "application/divina+json"
-        assert "/opds/v2/manifest" in self_links[0]["href"]
+        assert "/manifest" in self_links[0]["href"]
 
     def test_publication_has_self_link_to_manifest(self, client_with_comic, auth_headers, opds2_headers):
         """OPDS 2.0 publication has a self link pointing to a DiViNa manifest."""
@@ -130,7 +130,7 @@ class TestOPDS2PublicationLinks:
         assert self_link["type"] == "application/divina+json", (
             f"Self link type should be 'application/divina+json', got '{self_link['type']}'"
         )
-        assert "/opds/v2/manifest" in self_link["href"], (
+        assert "/manifest" in self_link["href"], (
             f"Self link should point to manifest endpoint, got '{self_link['href']}'"
         )
 

@@ -43,6 +43,25 @@ def _common_file_headers(p: Path) -> dict:
         "Content-Disposition": f'inline; filename="{p.name}"',
     }
 
+
+def _resolve_item(item_id: int) -> tuple:
+    """Look up a DB item by rowid and return (row, abs_path).
+
+    Raises HTTPException(404) if the item doesn't exist in the DB
+    or the file is missing on disk.
+    """
+    conn = db.connect()
+    try:
+        row = db.get_item_by_id(conn, item_id)
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(404, "Item not found")
+    p = (LIBRARY_DIR / row["rel"]).resolve()
+    if not p.exists() or not p.is_file():
+        raise HTTPException(404, "File not found")
+    return row, p
+
 # -------------------- OPDS Browse --------------------
 
 @router.get("/opds", response_class=Response)
@@ -470,6 +489,131 @@ def pse_page(path: str = Query(...), page: int = Query(0, ge=0), user: str = Dep
     except Exception:
         pass
     return FileResponse(out, media_type="image/jpeg")
+
+# -------------------- ID-based endpoints (safe for all clients) ----------
+
+@router.head("/book/{item_id}/download")
+def book_download_head(item_id: int, user: str = Depends(require_basic)):
+    row, p = _resolve_item(item_id)
+    headers = _common_file_headers(p)
+    headers["Content-Length"] = str(p.stat().st_size)
+    return Response(status_code=200, headers=headers)
+
+
+@router.get("/book/{item_id}/download")
+def book_download(item_id: int, request: Request, range: str | None = Header(default=None), user: str = Depends(require_basic)):
+    row, p = _resolve_item(item_id)
+    logger.info("book_download: user=%s id=%d file=%s", user, item_id, row["rel"])
+    return download(path=row["rel"], request=request, range=range, user=user)
+
+
+@router.get("/book/{item_id}/thumb")
+def book_thumb(item_id: int, _=Depends(require_basic)):
+    row, p = _resolve_item(item_id)
+    cvid = rget(row, "comicvineissue")
+    tp = have_thumb(row["rel"], cvid) or generate_thumb(row["rel"], p, cvid)
+    if not tp or not tp.exists():
+        raise HTTPException(404, "No thumbnail")
+    return FileResponse(tp, media_type="image/jpeg")
+
+
+@router.get("/book/{item_id}/page/{page_num}")
+def book_page(item_id: int, page_num: int, _=Depends(require_basic)):
+    """Serve a page by zero-based index."""
+    row, p = _resolve_item(item_id)
+    if p.suffix.lower() != ".cbz":
+        raise HTTPException(400, "Not a CBZ")
+    pages = cbz_list_pages(p)
+    if not pages or page_num >= len(pages):
+        raise HTTPException(404, "Page not found")
+    inner = pages[page_num]
+    cache_dir = book_cache_dir(row["rel"])
+    dest = cache_dir / f"{page_num+1:04d}.jpg"
+    out = ensure_page_jpeg(p, inner, dest)
+    try:
+        (cache_dir / ".last").touch()
+    except Exception:
+        pass
+    return FileResponse(out, media_type="image/jpeg")
+
+
+@router.get("/book/{item_id}/manifest")
+def book_manifest(item_id: int, user: str = Depends(require_basic)):
+    """DiViNa manifest by item ID — no path encoding issues."""
+    row, abs_cbz = _resolve_item(item_id)
+    if abs_cbz.suffix.lower() != ".cbz":
+        raise HTTPException(400, "Not a CBZ")
+    logger.info("book_manifest: user=%s id=%d file=%s", user, item_id, row["rel"])
+
+    base = SERVER_BASE.rstrip("/")
+    pages = cbz_list_pages(abs_cbz)
+    page_count = len(pages)
+
+    reading_order = []
+    for i in range(page_count):
+        page_link: dict[str, Any] = {
+            "href": f"{base}{abs_url(f'/book/{item_id}/page/{i}')}",
+            "type": "image/jpeg",
+        }
+        if i == 0:
+            page_link["rel"] = "cover"
+        reading_order.append(page_link)
+
+    meta: dict[str, Any] = {
+        "title": display_title(row),
+        "conformsTo": DIVINA_PROFILE,
+        "numberOfPages": page_count,
+        "readingProgression": "ltr",
+    }
+
+    authors = authors_from_row(row)
+    if authors:
+        meta["author"] = [{"name": a} for a in authors]
+
+    series = rget(row, "series")
+    number = rget(row, "number")
+    if series:
+        belongs_to: dict[str, Any] = {"series": {"name": series}}
+        if number:
+            try:
+                belongs_to["series"]["position"] = float(number) if "." in number else int(number)
+            except (ValueError, TypeError):
+                pass
+        meta["belongsTo"] = belongs_to
+
+    issued = issued_from_row(row)
+    if issued:
+        meta["published"] = issued
+
+    summary = rget(row, "summary")
+    if summary:
+        meta["description"] = summary
+
+    resources = []
+    cvid = rget(row, "comicvineissue")
+    if (rget(row, "ext") or "").lower() == "cbz":
+        tp = have_thumb(row["rel"], cvid) or generate_thumb(row["rel"], abs_cbz, cvid)
+        if tp:
+            resources.append({
+                "rel": "cover",
+                "href": f"{base}{abs_url(f'/book/{item_id}/thumb')}",
+                "type": "image/jpeg",
+            })
+
+    self_href = f"{base}{abs_url(f'/book/{item_id}/manifest')}"
+
+    manifest = {
+        "@context": "https://readium.org/webpub-manifest/context.jsonld",
+        "metadata": meta,
+        "links": [
+            {"rel": "self", "href": self_href, "type": "application/divina+json"}
+        ],
+        "readingOrder": reading_order,
+    }
+    if resources:
+        manifest["resources"] = resources
+
+    return JSONResponse(content=manifest, media_type="application/divina+json")
 
 # -------------------- Smart Lists (OPDS browse) --------------------
 

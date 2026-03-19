@@ -8,10 +8,10 @@ import threading
 import time
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from . import auth, db
 from .config import (
@@ -53,6 +53,12 @@ app = FastAPI(title="ComicOPDS")
 app.include_router(admin_router)
 app.include_router(opds_router)
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    app_logger.error("Unhandled exception at %s: %s", request.url.path, exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     try:
@@ -80,7 +86,7 @@ async def log_requests(request: Request, call_next):
 # -------------------- Small helpers --------------------
 
 @lru_cache(maxsize=1)
-def _git_commit() -> Optional[str]:
+def _git_commit() -> str | None:
     for name in ("GIT_COMMIT", "SOURCE_COMMIT", "COMMIT_SHA", "GITHUB_SHA"):
         value = (os.getenv(name) or "").strip()
         if value:
@@ -111,7 +117,7 @@ def _build_info() -> dict[str, Any]:
     }
 
 def _health_payload() -> dict[str, Any]:
-    return {"ok": True, **_build_info()}
+    return {"ok": True}
 
 @app.on_event("startup")
 def startup():
@@ -120,6 +126,8 @@ def startup():
 
     # Ensure admin user exists
     db.seed_admin_user(auth.USER, auth.PASS)
+    if auth.USER == "admin" and auth.PASS == "change-me":
+        app_logger.warning("DEFAULT CREDENTIALS IN USE - set OPDS_BASIC_USER and OPDS_BASIC_PASS")
 
     # Show SQLite version + FTS status in logs
     conn = db.connect()
@@ -173,15 +181,37 @@ def startup():
         set_status(running=False, phase="idle", total=0, done=0, current="", ended_at=time.time())
 
 # -------------------- Routes --------------------
+
+_OPDS_ACCEPT = ("application/atom+xml", "application/opds+json", "application/json")
+_BROWSER_UA = ("mozilla/", "chrome/", "safari/", "firefox/", "edg/", "opera/")
+
+def _is_browser(request: Request) -> bool:
+    """Detect browser clients by UA string and Accept header."""
+    accept = request.headers.get("accept", "")
+    if any(t in accept for t in _OPDS_ACCEPT):
+        return False
+    if "text/html" in accept:
+        return True
+    ua = request.headers.get("user-agent", "").lower()
+    return any(tok in ua for tok in _BROWSER_UA)
+
+@app.get("/")
+def landing_page(request: Request):
+    if not _is_browser(request):
+        from .feeds import abs_url
+        return RedirectResponse(abs_url("/opds"), status_code=302)
+    from .feeds import env, BASE
+    tpl = env.get_template("landing.html")
+    return HTMLResponse(tpl.render(feed_url=f"{BASE}/opds", commit=_git_commit()))
+
 @app.get("/healthz")
 def health():
     return JSONResponse(_health_payload())
 
 
 if __name__ == "__main__":
-    import uvicorn
-    import sys
     import argparse
+    import uvicorn
 
     parser = argparse.ArgumentParser(description="ComicOPDS Server")
     parser.add_argument("--scan-only", action="store_true", help="Run the library scanner and exit")
@@ -196,7 +226,4 @@ if __name__ == "__main__":
         print("Success! Exiting.")
         sys.exit(0)
 
-    # Note that `from app.config import SERVER_PORT` could be used here but the existing codebase launches with CLI uvicorn rather than this block directly.
-    # Uvicorn does run this block if called via `python main.py` or similar.
-    # However we will use the standard default for testing:
     uvicorn.run("app.main:app", host="0.0.0.0", port=8080, loop="asyncio")

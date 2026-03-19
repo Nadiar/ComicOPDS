@@ -163,6 +163,9 @@
       distinctModeWrap.style.display = (distinctBySel.value === 'series_volume') ? '' : 'none';
     });
 
+    function escapeHtml(s){ const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
+    const xhrHeaders = { 'X-Requested-With': 'XMLHttpRequest' };
+
     function addGroup(data) {
       const node = groupTpl.content.cloneNode(true);
       const card = node.querySelector('.group-card');
@@ -219,24 +222,41 @@
       data.forEach(l => {
         const col = document.createElement('div');
         col.className = 'col-12';
-        const distinctTxt = l.distinct_by ? `${l.distinct_by} (${l.distinct_mode || 'latest'})` : '—';
-        col.innerHTML = `
-          <div class="card h-100">
-            <div class="card-body d-flex justify-content-between align-items-start">
-              <div>
-                <div class="fw-semibold">${l.name}</div>
-                <div class="small text-secondary">
-                  ${(l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' "'+String(r.value||'').replace(/"/g,'&quot;')+'"').join(' AND ')).join(' <b>OR</b> ') || '—'}
-                </div>
-                <div class="small text-secondary mt-1">Sort: ${l.sort || 'issued_desc'} • Limit: ${l.limit || 0} • Distinct: ${distinctTxt}${l.group_by ? ' • Group: ' + l.group_by : ''}</div>
-                <div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/opds/smart/${l.slug}">Open in OPDS</a></div>
-              </div>
-              <div class="btn-group btn-group-sm">
-                <button class="btn btn-outline-secondary edit">Edit</button>
-                <button class="btn btn-outline-danger delete">Delete</button>
-              </div>
-            </div>
-          </div>`;
+        const rulesText = (l.groups||[]).map((g,i)=>'Group '+(i+1)+': '+g.rules.map(r => (r.not?'NOT ':'')+r.field+' '+r.op+' \u201c'+String(r.value||'')+'\u201d').join(' AND ')).join(' OR ') || '\u2014';
+        const card = document.createElement('div');
+        card.className = 'card h-100';
+        const nameDiv = document.createElement('div');
+        nameDiv.className = 'fw-semibold';
+        nameDiv.textContent = l.name;
+        const rulesDiv = document.createElement('div');
+        rulesDiv.className = 'small text-secondary';
+        rulesDiv.textContent = rulesText;
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'small text-secondary mt-1';
+        metaDiv.textContent = 'Sort: ' + (l.sort || 'issued_desc') + ' \u2022 Limit: ' + (l.limit || 0) + ' \u2022 Distinct: ' + (l.distinct_by ? l.distinct_by + ' (' + (l.distinct_mode || 'latest') + ')' : '\u2014') + (l.group_by ? ' \u2022 Group: ' + l.group_by : '');
+        const linkDiv = document.createElement('div');
+        linkDiv.className = 'mt-2';
+        const opdsLink = document.createElement('a');
+        opdsLink.className = 'btn btn-sm btn-outline-primary';
+        opdsLink.href = '/opds/smart/' + encodeURIComponent(l.slug);
+        opdsLink.textContent = 'Open in OPDS';
+        linkDiv.appendChild(opdsLink);
+        const infoCol = document.createElement('div');
+        infoCol.append(nameDiv, rulesDiv, metaDiv, linkDiv);
+        const btnGroup = document.createElement('div');
+        btnGroup.className = 'btn-group btn-group-sm';
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn btn-outline-secondary edit';
+        editBtn.textContent = 'Edit';
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn btn-outline-danger delete';
+        deleteBtn.textContent = 'Delete';
+        btnGroup.append(editBtn, deleteBtn);
+        const body = document.createElement('div');
+        body.className = 'card-body d-flex justify-content-between align-items-start';
+        body.append(infoCol, btnGroup);
+        card.appendChild(body);
+        col.appendChild(card);
         col.querySelector('.edit').onclick = () => {
           document.getElementById('listName').value = l.name;
           document.getElementById('sort').value = l.sort || 'issued_desc';
@@ -261,7 +281,7 @@
     async function saveLists(lists) {
       const res = await fetch('/smartlists.json', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...xhrHeaders },
         credentials: 'include',
         body: JSON.stringify(lists)
       });

@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from pathlib import Path
-from typing import Any
+from urllib.parse import quote
 
+import bcrypt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
@@ -41,14 +43,13 @@ class UserCreate(BaseModel):
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
-    password: str = None
-    is_admin: bool = None
+    password: str | None = None
+    is_admin: bool | None = None
 
 # -------------------- Dashboard --------------------
 
 @router.get("/dashboard", response_class=HTMLResponse)
 def dashboard_page(request: Request, user: str = Depends(auth.require_admin)):
-    """The dashboard is now restricted to users with is_admin=1 (or the master ENV admin)"""
     tpl = env.get_template("dashboard.html")
     return HTMLResponse(tpl.render())
 
@@ -73,8 +74,11 @@ def list_users(admin: str = Depends(auth.require_admin)):
         conn.close()
 
 @router.post("/api/users")
-def create_user(user: UserCreate, admin: str = Depends(auth.require_admin)):
-    import bcrypt
+def create_user(
+    user: UserCreate,
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: user created username=%s by=%s", user.username, admin)
     conn = db.connect()
     try:
@@ -91,8 +95,12 @@ def create_user(user: UserCreate, admin: str = Depends(auth.require_admin)):
         conn.close()
 
 @router.put("/api/users/{user_id}")
-def update_user(user_id: int, user: UserUpdate, admin: str = Depends(auth.require_admin)):
-    import bcrypt
+def update_user(
+    user_id: int,
+    user: UserUpdate,
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: user updated id=%d by=%s", user_id, admin)
     conn = db.connect()
     try:
@@ -118,7 +126,11 @@ def update_user(user_id: int, user: UserUpdate, admin: str = Depends(auth.requir
         conn.close()
 
 @router.delete("/api/users/{user_id}")
-def delete_user(user_id: int, admin: str = Depends(auth.require_admin)):
+def delete_user(
+    user_id: int,
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: user deleted id=%d by=%s", user_id, admin)
     conn = db.connect()
     try:
@@ -142,7 +154,11 @@ def index_status(_=Depends(require_basic)):
     return JSONResponse({**INDEX_STATUS, "usable": usable})
 
 @router.post("/admin/reindex", response_class=JSONResponse)
-def admin_reindex(force: bool = Query(False), admin: str = Depends(auth.require_admin)):
+def admin_reindex(
+    force: bool = Query(False),
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: reindex triggered by=%s force=%s", admin, force)
     if INDEX_STATUS["running"]:
         return JSONResponse({"ok": True, "started": False, "reason": "already running"})
@@ -151,6 +167,7 @@ def admin_reindex(force: bool = Query(False), admin: str = Depends(auth.require_
 
 @router.post("/admin/reindex/path", response_class=JSONResponse)
 def admin_reindex_path(path: str = Query(..., description="Relative path to a file or folder inside the library"),
+                       _: None = Depends(auth.require_csrf_header),
                        admin: str = Depends(auth.require_admin)):
     """Index or re-index a specific file or folder by relative path."""
     logger.info("admin: path reindex triggered by=%s path=%s", admin, path)
@@ -190,7 +207,10 @@ def admin_reindex_path(path: str = Query(..., description="Relative path to a fi
 # -------------------- Thumbnails --------------------
 
 @router.post("/admin/thumbs/precache", response_class=JSONResponse)
-def admin_thumbs_precache(admin: str = Depends(auth.require_admin)):
+def admin_thumbs_precache(
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: thumbnail precache triggered by=%s", admin)
     if THUMB_STATUS["running"]:
         return JSONResponse({"ok": True, "started": False, "reason": "already running"})
@@ -231,6 +251,18 @@ def thumbs_errors_log(_=Depends(require_basic)):
         headers={"Cache-Control": "no-store"}
     )
 
+@router.post("/thumbs/errors/clear", response_class=JSONResponse)
+def thumbs_errors_clear(
+    _: None = Depends(auth.require_csrf_header),
+    __=Depends(auth.require_admin),
+):
+    try:
+        if ERROR_LOG_PATH.exists():
+            ERROR_LOG_PATH.unlink()
+    except OSError:
+        pass
+    return {"ok": True}
+
 # -------------------- Page cache --------------------
 
 @router.get("/pages/cache/status", response_class=JSONResponse)
@@ -238,51 +270,54 @@ def pages_cache_status_route(_=Depends(require_basic)):
     return JSONResponse(page_cache_status())
 
 @router.post("/admin/pages/cleanup", response_class=JSONResponse)
-def admin_pages_cleanup(admin: str = Depends(auth.require_admin)):
+def admin_pages_cleanup(
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: page cache cleanup triggered by=%s", admin)
     res = clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
     return JSONResponse({"ok": True, **res})
 
 # -------------------- Smart Lists (CRUD) --------------------
 
-import re
-from urllib.parse import quote
-
 SMARTLISTS_PATH = Path("/data/smartlists.json")
+
 
 def _slugify(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-") or "list"
 
+
 def _load_smartlists() -> list[dict]:
-    if SMARTLISTS_PATH.exists():
-        try:
-            return json.loads(SMARTLISTS_PATH.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load smartlists: %s", e)
-            return []
-    return []
+    """Load smart lists from JSON, handling legacy formats (nested lists, dict wrappers)."""
+    if not SMARTLISTS_PATH.exists():
+        return []
+    try:
+        data = json.loads(SMARTLISTS_PATH.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        logger.warning("Failed to load smartlists: %s", e)
+        return []
+
+    if isinstance(data, dict) and "lists" in data and isinstance(data["lists"], list):
+        data = data["lists"]
+    elif not isinstance(data, list):
+        return []
+
+    flat: list[dict] = []
+    def _flatten(obj):
+        if isinstance(obj, list):
+            for item in obj:
+                _flatten(item)
+        elif isinstance(obj, dict):
+            flat.append(obj)
+    _flatten(data)
+    return flat
+
 
 def _save_smartlists(lists: list[dict]) -> None:
     SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SMARTLISTS_PATH.write_text(json.dumps(lists, ensure_ascii=False, indent=0), encoding="utf-8")
-
-def _smartlists_load():
-    if SMARTLISTS_PATH.exists():
-        try:
-            with SMARTLISTS_PATH.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, dict) and "lists" in data and isinstance(data["lists"], list):
-                return data["lists"]
-            if isinstance(data, list):
-                return data
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Failed to load smartlists: %s", e)
-    return []
-
-def _smartlists_save(lists):
-    SMARTLISTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with SMARTLISTS_PATH.open("w", encoding="utf-8") as f:
-        json.dump(lists, f, ensure_ascii=False, indent=2)
+    SMARTLISTS_PATH.write_text(
+        json.dumps(lists, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 @router.get("/search", response_class=HTMLResponse)
 def smartlists_page(_=Depends(require_basic)):
@@ -291,11 +326,14 @@ def smartlists_page(_=Depends(require_basic)):
 
 @router.get("/smartlists.json", response_class=JSONResponse)
 def smartlists_get(_=Depends(require_basic)):
-    """Return the raw JSON array of smart lists (or [] if none)."""
-    return JSONResponse(_smartlists_load())
+    return JSONResponse(_load_smartlists())
 
 @router.post("/smartlists.json", response_class=JSONResponse)
-async def smartlists_post(request: Request, admin: str = Depends(auth.require_admin)):
+async def smartlists_post(
+    request: Request,
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
     logger.info("admin: smart lists updated by=%s", admin)
     raw = await request.body()
     if not raw:
@@ -316,7 +354,7 @@ async def smartlists_post(request: Request, admin: str = Depends(auth.require_ad
         return JSONResponse({"ok": False, "error": "expected JSON array or object"}, status_code=400)
 
     try:
-        _smartlists_save(lists)
+        _save_smartlists(lists)
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"write failed: {e}"}, status_code=500)
 
@@ -325,7 +363,7 @@ async def smartlists_post(request: Request, admin: str = Depends(auth.require_ad
 # -------------------- Debug --------------------
 
 @router.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = "", _=Depends(require_basic)):
+def debug_children(path: str = "", _=Depends(auth.require_admin)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -334,10 +372,10 @@ def debug_children(path: str = "", _=Depends(require_basic)):
     return JSONResponse([{"rel": r["rel"], "is_dir": int(r["is_dir"]), "name": r["name"]} for r in rows])
 
 @router.get("/debug/fts")
-def debug_fts(_=Depends(require_basic)):
+def debug_fts(_=Depends(auth.require_admin)):
     return {"fts5": db.has_fts5()}
 
 @router.get("/debug/build", response_class=JSONResponse)
-def debug_build(_=Depends(require_basic)):
+def debug_build(_=Depends(auth.require_admin)):
     from .main import _build_info
     return JSONResponse(_build_info())

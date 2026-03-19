@@ -4,7 +4,7 @@ from __future__ import annotations
 import email.utils
 import hashlib
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import Request, Response
@@ -20,7 +20,9 @@ env = Environment(
     autoescape=select_autoescape(enabled_extensions=("xml", "html", "j2"), default=True),
 )
 
-# -------------------- OPDS media type constants --------------------
+# -------------------- Constants --------------------
+
+BASE = SERVER_BASE.rstrip("/")
 
 OPDS_XML_MEDIA = "application/atom+xml;profile=opds-catalog;charset=utf-8"
 OPDS_NAV_MEDIA = "application/atom+xml;profile=opds-catalog;kind=navigation"
@@ -29,7 +31,6 @@ OPDS_ACQ_MEDIA = "application/atom+xml;profile=opds-catalog;kind=acquisition"
 
 def xml_response(xml: str, headers: dict | None = None,
                  media_type: str = OPDS_XML_MEDIA) -> Response:
-    """Return an XML Response with explicit UTF-8 encoding."""
     return Response(
         content=xml.encode("utf-8"),
         media_type=media_type,
@@ -40,7 +41,7 @@ def xml_response(xml: str, headers: dict | None = None,
 # -------------------- Small helpers --------------------
 
 def rget(row, key: str, default=None):
-    """Safe access for sqlite3.Row (no .get())."""
+    """Safe access for sqlite3.Row (no .get() method)."""
     try:
         val = row[key]
         return default if val in (None, "") else val
@@ -57,7 +58,7 @@ def opds_media_type(kind: str) -> str:
 
 
 def opds_base(request: Request) -> str:
-    """Return the OPDS path base ('/opds', '/opds12', or '/opds20') from the request URL."""
+    """Return the OPDS path base from the request URL."""
     path = request.url.path
     if path.startswith(f"{URL_PREFIX}/opds20"):
         return "/opds20"
@@ -85,14 +86,11 @@ def prefers_opds2(request: Request) -> bool:
 
 
 def opds_cache_headers(last_mod: float, request: Request | None = None) -> dict | None:
-    """HTTP caching headers for OPDS feed responses.
-
-    Returns None if the client sent a matching ETag (304 Not Modified).
-    """
+    """Return cache headers, or None if the client's ETag matches (304)."""
     path_hash = ""
     if request:
         path_key = (request.url.path + "?" + str(request.url.query or "")).encode()
-        path_hash = "-" + hashlib.md5(path_key).hexdigest()[:8]
+        path_hash = "-" + hashlib.sha256(path_key).hexdigest()[:8]
     etag = f'"opds-{int(last_mod)}{path_hash}"'
     if request:
         if_none_match = request.headers.get("if-none-match", "")
@@ -135,7 +133,7 @@ def authors_from_row(row) -> list[str]:
     return out
 
 
-def issued_from_row(row) -> Optional[str]:
+def issued_from_row(row) -> str | None:
     y = rget(row, "year")
     if not y:
         return None
@@ -165,12 +163,7 @@ def categories_from_row(row) -> list[str]:
 
 
 def _entry_data_from_row(row) -> dict[str, Any]:
-    """Extract common entry data from a database row.
-
-    Both XML and JSON entry builders use this to avoid duplicating
-    thumbnail/metadata logic.
-    """
-    base = SERVER_BASE.rstrip("/")
+    """Extract common entry data from a database row for XML/JSON builders."""
     rel = row["rel"]
     abs_file = LIBRARY_DIR / rel
     item_id = rget(row, "id")
@@ -196,13 +189,13 @@ def _entry_data_from_row(row) -> dict[str, Any]:
     thumb_href_abs = None
     image_abs = None
     if (rget(row, "ext") or "").lower() == "cbz":
-        image_abs = f"{base}{abs_url(thumb_path)}"
+        image_abs = f"{BASE}{abs_url(thumb_path)}"
         thumb_href_abs = image_abs
 
     return {
         "rel": rel,
         "abs_file": abs_file,
-        "base": base,
+        "base": BASE,
         "id": item_id,
         "title": display_title(row),
         "authors": authors_from_row(row),
@@ -230,28 +223,27 @@ def _entry_data_from_row(row) -> dict[str, Any]:
 def entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA,
                        opds_prefix: str = "/opds") -> str:
     tpl = env.get_template("entry.xml.j2")
-    base = SERVER_BASE.rstrip("/")
 
     if row["is_dir"]:
         href = f"{opds_prefix}?path={quote(row['rel'])}" if row["rel"] else opds_prefix
         return tpl.render(
-            entry_id=f"{base}{abs_url(opds_prefix + '/' + quote(row['rel']))}",
+            entry_id=f"{BASE}{abs_url(opds_prefix + '/' + quote(row['rel']))}",
             updated=mtime_rfc3339(row["mtime"]),
             title=row["name"] or "/",
             is_dir=True,
-            href_abs=f"{base}{abs_url(href)}",
+            href_abs=f"{BASE}{abs_url(href)}",
             dir_link_type=dir_link_type,
         )
 
     d = _entry_data_from_row(row)
     return tpl.render(
-        entry_id=f"{base}{abs_url(d['download_href'])}",
+        entry_id=f"{BASE}{abs_url(d['download_href'])}",
         updated=mtime_rfc3339(d["mtime"]),
         title=d["title"],
         is_dir=False,
-        download_href_abs=f"{base}{abs_url(d['download_href'])}",
-        stream_href_abs=f"{base}{abs_url(d['stream_href'])}",
-        pse_template_abs=f"{base}{abs_url(d['pse_template'])}",
+        download_href_abs=f"{BASE}{abs_url(d['download_href'])}",
+        stream_href_abs=f"{BASE}{abs_url(d['stream_href'])}",
+        pse_template_abs=f"{BASE}{abs_url(d['pse_template'])}",
         page_count=d["page_count"],
         mime=d["mime"],
         size_str=d["size_str"],
@@ -264,27 +256,26 @@ def entry_xml_from_row(row, dir_link_type: str = OPDS_NAV_MEDIA,
     )
 
 
-def feed(entries_xml: List[str], title: str, self_href: str,
-         next_href: Optional[str] = None,
-         os_total: Optional[int] = None,
-         os_start: Optional[int] = None,
-         os_items: Optional[int] = None,
+def feed(entries_xml: list[str], title: str, self_href: str,
+         next_href: str | None = None,
+         os_total: int | None = None,
+         os_start: int | None = None,
+         os_items: int | None = None,
          search_href: str = "/opds/search.xml",
-         start_href_override: Optional[str] = None,
-         updated: Optional[str] = None,
+         start_href_override: str | None = None,
+         updated: str | None = None,
          self_type: str = OPDS_NAV_MEDIA,
          start_type: str = OPDS_NAV_MEDIA,
-         next_type: Optional[str] = None):
+         next_type: str | None = None):
     tpl = env.get_template("feed.xml.j2")
-    base = SERVER_BASE.rstrip("/")
     return tpl.render(
-        feed_id=f"{base}{abs_url(self_href)}",
+        feed_id=f"{BASE}{abs_url(self_href)}",
         updated=updated or now_rfc3339(),
         title=title,
         self_href=abs_url(self_href),
         start_href=abs_url(start_href_override or "/opds"),
         search_href=abs_url(search_href),
-        base=base,
+        base=BASE,
         next_href=abs_url(next_href) if next_href else None,
         self_type=self_type,
         start_type=start_type,
@@ -299,12 +290,11 @@ def feed(entries_xml: List[str], title: str, self_href: str,
 # -------------------- OPDS 2.0 JSON entry/feed builders --------------------
 
 def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
-    base = SERVER_BASE.rstrip("/")
     if row["is_dir"]:
         href = f"{opds_prefix}?path={quote(row['rel'])}" if row["rel"] else opds_prefix
         return {
             "title": row["name"] or "/",
-            "href": f"{base}{abs_url(href)}",
+            "href": f"{BASE}{abs_url(href)}",
             "type": "application/opds+json"
         }
 
@@ -313,7 +303,7 @@ def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
     meta: dict[str, Any] = {
         "title": d["title"],
         "author": [{"name": a} for a in d["authors"]],
-        "identifier": f"{base}{abs_url(d['download_href'])}",
+        "identifier": f"{BASE}{abs_url(d['download_href'])}",
         "modified": mtime_rfc3339(d["mtime"]),
     }
     if d["page_count"]:
@@ -335,12 +325,12 @@ def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
         "links": [
             {
                 "rel": "self",
-                "href": f"{base}{abs_url(d['manifest_href'])}",
+                "href": f"{BASE}{abs_url(d['manifest_href'])}",
                 "type": "application/divina+json"
             },
             {
                 "rel": "http://opds-spec.org/acquisition/open-access",
-                "href": f"{base}{abs_url(d['download_href'])}",
+                "href": f"{BASE}{abs_url(d['download_href'])}",
                 "type": d["mime"]
             },
         ],
@@ -372,26 +362,25 @@ def entry_json_from_row(row, opds_prefix: str = "/opds") -> dict:
 
 
 def feed_json(rows: list, title: str, self_href: str,
-              next_href: Optional[str] = None,
-              prev_href: Optional[str] = None,
-              os_total: Optional[int] = None,
-              os_start: Optional[int] = None,
-              os_items: Optional[int] = None,
+              next_href: str | None = None,
+              prev_href: str | None = None,
+              os_total: int | None = None,
+              os_start: int | None = None,
+              os_items: int | None = None,
               search_href: str = "/opds/search.xml",
-              start_href_override: Optional[str] = None,
-              updated: Optional[str] = None,
+              start_href_override: str | None = None,
+              updated: str | None = None,
               opds_prefix: str = "/opds") -> dict:
 
-    base = SERVER_BASE.rstrip("/")
     feed_dict = {
         "metadata": {
             "title": title,
             "modified": updated or now_rfc3339()
         },
         "links": [
-            {"rel": "self", "href": f"{base}{abs_url(self_href)}", "type": "application/opds+json"},
-            {"rel": "start", "href": f"{base}{abs_url(start_href_override or '/opds')}", "type": "application/opds+json"},
-            {"rel": "search", "href": f"{base}{abs_url(search_href)}", "type": "application/opensearchdescription+xml"}
+            {"rel": "self", "href": f"{BASE}{abs_url(self_href)}", "type": "application/opds+json"},
+            {"rel": "start", "href": f"{BASE}{abs_url(start_href_override or '/opds')}", "type": "application/opds+json"},
+            {"rel": "search", "href": f"{BASE}{abs_url(search_href)}", "type": "application/opensearchdescription+xml"}
         ],
         "navigation": [],
         "publications": []
@@ -404,10 +393,10 @@ def feed_json(rows: list, title: str, self_href: str,
         feed_dict["metadata"]["itemsPerPage"] = os_items
 
     if next_href:
-        feed_dict["links"].append({"rel": "next", "href": f"{base}{abs_url(next_href)}", "type": "application/opds+json"})
+        feed_dict["links"].append({"rel": "next", "href": f"{BASE}{abs_url(next_href)}", "type": "application/opds+json"})
 
     if prev_href:
-        feed_dict["links"].append({"rel": "previous", "href": f"{base}{abs_url(prev_href)}", "type": "application/opds+json"})
+        feed_dict["links"].append({"rel": "previous", "href": f"{BASE}{abs_url(prev_href)}", "type": "application/opds+json"})
 
     for r in rows:
         if isinstance(r, dict) and 'is_smart' in r:

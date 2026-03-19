@@ -11,9 +11,9 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from . import db
 from .auth import require_basic
-from .config import LIBRARY_DIR, PAGE_SIZE, SERVER_BASE
+from .config import LIBRARY_DIR, PAGE_SIZE
 from .feeds import (
-    env, rget, abs_url, opds_media_type, opds_base, prefers_opds2,
+    BASE, env, rget, abs_url, opds_media_type, opds_base, prefers_opds2,
     opds_cache_headers, xml_response,
     display_title, authors_from_row, issued_from_row,
     entry_xml_from_row, entry_json_from_row, feed, feed_json,
@@ -22,6 +22,7 @@ from .feeds import (
 from .opds import now_rfc3339, mtime_rfc3339, mime_for
 from .page_cache import cbz_list_pages, book_cache_dir, ensure_page_jpeg
 from .routes_admin import _load_smartlists, SMARTLISTS_PATH
+from .scanning import refresh_directory
 from .thumbs import have_thumb, generate_thumb
 
 logger = logging.getLogger("comicopds")
@@ -37,19 +38,15 @@ def _abspath(rel: str) -> Path:
     return p
 
 def _common_file_headers(p: Path) -> dict:
+    safe_name = quote(p.name)
     return {
         "Accept-Ranges": "bytes",
         "Content-Type": mime_for(p),
-        "Content-Disposition": f'inline; filename="{p.name}"',
+        "Content-Disposition": f"inline; filename*=UTF-8''{safe_name}",
     }
 
 
 def _resolve_item(item_id: int) -> tuple:
-    """Look up a DB item by rowid and return (row, abs_path).
-
-    Raises HTTPException(404) if the item doesn't exist in the DB
-    or the file is missing on disk.
-    """
     conn = db.connect()
     try:
         row = db.get_item_by_id(conn, item_id)
@@ -69,6 +66,7 @@ def _resolve_item(item_id: int) -> tuple:
 @router.get("/opds20", response_class=Response)
 def browse(request: Request, path: str = Query("", description="Relative folder path"), page: int = 1, _=Depends(require_basic)):
     path = path.strip("/")
+    refresh_directory(path)
     conn = db.connect()
     try:
         total = db.children_count(conn, path)
@@ -96,12 +94,11 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
     if is_opds2:
         row_dicts = [dict(r) for r in rows]
         if path == "" and page == 1:
-            base = SERVER_BASE.rstrip("/")
             smart_href = abs_url(f"{ob}/smart")
             row_dicts.insert(0, {
                 "is_smart": True,
                 "title": "\U0001f4c1 Smart Lists",
-                "href": f"{base}{smart_href}"
+                "href": f"{BASE}{smart_href}"
             })
 
         feed_dict = feed_json(
@@ -129,14 +126,13 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         # "Smart Lists" virtual folder at root/page 1
         if path == "" and page == 1:
             tpl = env.get_template("entry.xml.j2")
-            base = SERVER_BASE.rstrip("/")
             smart_href = abs_url(f"{ob}/smart")
             smart_entry = tpl.render(
-                entry_id=f"{base}{smart_href}",
+                entry_id=f"{BASE}{smart_href}",
                 updated=updated_ts,
                 title="\U0001f4c1 Smart Lists",
                 is_dir=True,
-                href_abs=f"{base}{smart_href}",
+                href_abs=f"{BASE}{smart_href}",
                 dir_link_type=OPDS_NAV_MEDIA,
             )
             entries_xml = [smart_entry] + entries_xml
@@ -159,7 +155,7 @@ def root(request: Request, _=Depends(require_basic)):
 def opensearch_description(request: Request, _=Depends(require_basic)):
     ob = opds_base(request)
     tpl = env.get_template("search-description.xml.j2")
-    xml = tpl.render(base=SERVER_BASE.rstrip("/"), opds_base=ob)
+    xml = tpl.render(base=BASE, opds_base=ob)
     return xml_response(xml, media_type="application/opensearchdescription+xml;charset=utf-8")
 
 @router.get("/opds/search", response_class=Response)
@@ -345,33 +341,14 @@ def thumb(path: str, _=Depends(require_basic)):
 
 DIVINA_PROFILE = "https://readium.org/webpub-manifest/profiles/divina"
 
-@router.get("/opds/v2/manifest")
-def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), user: str = Depends(require_basic)):
-    """Return a DiViNa (Readium Web Publication) manifest for page-level streaming."""
-    logger.info("divina_manifest: user=%s file=%s", user, path)
-    abs_cbz = _abspath(path)
-    if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
-        raise HTTPException(404, "Book not found")
 
-    conn = db.connect()
-    try:
-        row = db.get_item(conn, path)
-    finally:
-        conn.close()
-
-    if not row:
-        raise HTTPException(404, "Item not in index")
-
-    base = SERVER_BASE.rstrip("/")
-    pages = cbz_list_pages(abs_cbz)
-    page_count = len(pages)
-
+def _build_divina_manifest(
+    row, abs_cbz: Path, page_hrefs: list[str], thumb_href: str, self_href: str,
+) -> dict:
+    """Build a DiViNa (Readium Web Publication) manifest dict."""
     reading_order = []
-    for i in range(page_count):
-        page_link: dict[str, Any] = {
-            "href": f"{base}{abs_url(f'/pse/page?path={quote(path)}&page={i}')}",
-            "type": "image/jpeg",
-        }
+    for i, href in enumerate(page_hrefs):
+        page_link: dict[str, Any] = {"href": href, "type": "image/jpeg"}
         if i == 0:
             page_link["rel"] = "cover"
         reading_order.append(page_link)
@@ -379,7 +356,7 @@ def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), 
     meta: dict[str, Any] = {
         "title": display_title(row),
         "conformsTo": DIVINA_PROFILE,
-        "numberOfPages": page_count,
+        "numberOfPages": len(page_hrefs),
         "readingProgression": "ltr",
     }
 
@@ -409,34 +386,50 @@ def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), 
     resources = []
     cvid = rget(row, "comicvineissue")
     if (rget(row, "ext") or "").lower() == "cbz":
-        p = have_thumb(path, cvid) or generate_thumb(path, abs_cbz, cvid)
-        if p:
-            resources.append({
-                "rel": "cover",
-                "href": f"{base}{abs_url('/thumb?path=' + quote(path))}",
-                "type": "image/jpeg",
-            })
-
-    self_href = f"{base}{abs_url(f'/opds/v2/manifest?path={quote(path)}')}"
+        rel_path = row["rel"]
+        tp = have_thumb(rel_path, cvid) or generate_thumb(rel_path, abs_cbz, cvid)
+        if tp:
+            resources.append({"rel": "cover", "href": thumb_href, "type": "image/jpeg"})
 
     manifest = {
         "@context": "https://readium.org/webpub-manifest/context.jsonld",
         "metadata": meta,
-        "links": [
-            {"rel": "self", "href": self_href, "type": "application/divina+json"}
-        ],
+        "links": [{"rel": "self", "href": self_href, "type": "application/divina+json"}],
         "readingOrder": reading_order,
     }
     if resources:
         manifest["resources"] = resources
+    return manifest
 
+
+@router.get("/opds/v2/manifest")
+def divina_manifest(path: str = Query(..., description="Relative path to CBZ"), user: str = Depends(require_basic)):
+    """DiViNa manifest by relative path."""
+    logger.info("divina_manifest: user=%s file=%s", user, path)
+    abs_cbz = _abspath(path)
+    if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
+        raise HTTPException(404, "Book not found")
+
+    conn = db.connect()
+    try:
+        row = db.get_item(conn, path)
+    finally:
+        conn.close()
+    if not row:
+        raise HTTPException(404, "Item not in index")
+
+    pages = cbz_list_pages(abs_cbz)
+    page_hrefs = [f"{BASE}{abs_url(f'/pse/page?path={quote(path)}&page={i}')}" for i in range(len(pages))]
+    thumb_href = f"{BASE}{abs_url('/thumb?path=' + quote(path))}"
+    self_href = f"{BASE}{abs_url(f'/opds/v2/manifest?path={quote(path)}')}"
+
+    manifest = _build_divina_manifest(row, abs_cbz, page_hrefs, thumb_href, self_href)
     return JSONResponse(content=manifest, media_type="application/divina+json")
 
 # -------------------- PSE endpoints --------------------
 
 @router.get("/pse/stream", response_class=Response)
 def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user: str = Depends(require_basic)):
-    """Optional: Atom feed per-pages (kept for compatibility)."""
     logger.info("pse_stream: user=%s file=%s", user, path)
     abs_cbz = _abspath(path)
     if not abs_cbz.exists() or not abs_cbz.is_file() or abs_cbz.suffix.lower() != ".cbz":
@@ -449,7 +442,7 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user:
         page_href = abs_url(f"/pse/page?path={quote(path)}&page={i}")
         entries_xml.append(
             page_entry_tpl.render(
-                entry_id=f"{SERVER_BASE.rstrip('/')}{page_href}",
+                entry_id=f"{BASE}{page_href}",
                 updated=now_rfc3339(),
                 title=f"Page {i}",
                 page_href=page_href,
@@ -459,7 +452,7 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user:
     pse_feed_tpl = env.get_template("pse_feed.xml.j2")
     self_href = f"/pse/stream?path={quote(path)}"
     xml = pse_feed_tpl.render(
-        feed_id=f"{SERVER_BASE.rstrip('/')}{abs_url(self_href)}",
+        feed_id=f"{BASE}{abs_url(self_href)}",
         updated=now_rfc3339(),
         title=f"Pages \u2014 {Path(path).name}",
         self_href=abs_url(self_href),
@@ -470,7 +463,6 @@ def pse_stream(path: str = Query(..., description="Relative path to CBZ"), user:
 
 @router.get("/pse/page")
 def pse_page(path: str = Query(...), page: int = Query(0, ge=0), user: str = Depends(require_basic)):
-    """Serve page by ZERO-BASED index to match Panels (0 == first page)."""
     logger.debug("pse_page: user=%s file=%s page=%d", user, path, page)
     abs_cbz = _abspath(path)
     if not abs_cbz.exists() or not abs_cbz.is_file():
@@ -539,80 +531,18 @@ def book_page(item_id: int, page_num: int, _=Depends(require_basic)):
 
 @router.get("/book/{item_id}/manifest")
 def book_manifest(item_id: int, user: str = Depends(require_basic)):
-    """DiViNa manifest by item ID — no path encoding issues."""
+    """DiViNa manifest by item ID."""
     row, abs_cbz = _resolve_item(item_id)
     if abs_cbz.suffix.lower() != ".cbz":
         raise HTTPException(400, "Not a CBZ")
     logger.info("book_manifest: user=%s id=%d file=%s", user, item_id, row["rel"])
 
-    base = SERVER_BASE.rstrip("/")
     pages = cbz_list_pages(abs_cbz)
-    page_count = len(pages)
+    page_hrefs = [f"{BASE}{abs_url(f'/book/{item_id}/page/{i}')}" for i in range(len(pages))]
+    thumb_href = f"{BASE}{abs_url(f'/book/{item_id}/thumb')}"
+    self_href = f"{BASE}{abs_url(f'/book/{item_id}/manifest')}"
 
-    reading_order = []
-    for i in range(page_count):
-        page_link: dict[str, Any] = {
-            "href": f"{base}{abs_url(f'/book/{item_id}/page/{i}')}",
-            "type": "image/jpeg",
-        }
-        if i == 0:
-            page_link["rel"] = "cover"
-        reading_order.append(page_link)
-
-    meta: dict[str, Any] = {
-        "title": display_title(row),
-        "conformsTo": DIVINA_PROFILE,
-        "numberOfPages": page_count,
-        "readingProgression": "ltr",
-    }
-
-    authors = authors_from_row(row)
-    if authors:
-        meta["author"] = [{"name": a} for a in authors]
-
-    series = rget(row, "series")
-    number = rget(row, "number")
-    if series:
-        belongs_to: dict[str, Any] = {"series": {"name": series}}
-        if number:
-            try:
-                belongs_to["series"]["position"] = float(number) if "." in number else int(number)
-            except (ValueError, TypeError):
-                pass
-        meta["belongsTo"] = belongs_to
-
-    issued = issued_from_row(row)
-    if issued:
-        meta["published"] = issued
-
-    summary = rget(row, "summary")
-    if summary:
-        meta["description"] = summary
-
-    resources = []
-    cvid = rget(row, "comicvineissue")
-    if (rget(row, "ext") or "").lower() == "cbz":
-        tp = have_thumb(row["rel"], cvid) or generate_thumb(row["rel"], abs_cbz, cvid)
-        if tp:
-            resources.append({
-                "rel": "cover",
-                "href": f"{base}{abs_url(f'/book/{item_id}/thumb')}",
-                "type": "image/jpeg",
-            })
-
-    self_href = f"{base}{abs_url(f'/book/{item_id}/manifest')}"
-
-    manifest = {
-        "@context": "https://readium.org/webpub-manifest/context.jsonld",
-        "metadata": meta,
-        "links": [
-            {"rel": "self", "href": self_href, "type": "application/divina+json"}
-        ],
-        "readingOrder": reading_order,
-    }
-    if resources:
-        manifest["resources"] = resources
-
+    manifest = _build_divina_manifest(row, abs_cbz, page_hrefs, thumb_href, self_href)
     return JSONResponse(content=manifest, media_type="application/divina+json")
 
 # -------------------- Smart Lists (OPDS browse) --------------------
@@ -637,13 +567,12 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
 
     if is_opds2:
         row_dicts = []
-        base = SERVER_BASE.rstrip("/")
         for sl in lists:
             href = f"{ob}/smart/{quote(sl['slug'])}"
             row_dicts.append({
                 "is_smart": True,
                 "title": sl["name"],
-                "href": f"{base}{abs_url(href)}"
+                "href": f"{BASE}{abs_url(href)}",
             })
         feed_dict = feed_json(row_dicts, title="Smart Lists", self_href=f"{ob}/smart",
                                search_href=f"{ob}/search.xml", start_href_override=ob,
@@ -656,11 +585,11 @@ def opds_smart_lists(request: Request, _=Depends(require_basic)):
             href = f"{ob}/smart/{quote(sl['slug'])}"
             entries.append(
                 tpl.render(
-                    entry_id=f"{SERVER_BASE.rstrip('/')}{abs_url(href)}",
+                    entry_id=f"{BASE}{abs_url(href)}",
                     updated=updated_ts,
                     title=sl["name"],
                     is_dir=True,
-                    href_abs=f"{SERVER_BASE.rstrip('/')}{abs_url(href)}",
+                    href_abs=f"{BASE}{abs_url(href)}",
                 )
             )
         xml = feed(entries, title="Smart Lists", self_href=f"{ob}/smart",
@@ -719,7 +648,6 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
         updated_ts = mtime_rfc3339(last_mod)
 
         ob = opds_base(request)
-        base = SERVER_BASE.rstrip("/")
         is_opds2 = prefers_opds2(request)
 
         if is_opds2:
@@ -730,7 +658,7 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
                 nav_items.append({
                     "is_smart": True,
                     "title": f"{label} ({v['issue_count']})",
-                    "href": f"{base}{abs_url(href)}",
+                    "href": f"{BASE}{abs_url(href)}",
                 })
             feed_dict = feed_json(nav_items, title=sl["name"],
                                    self_href=f"{ob}/smart/{quote(slug)}",
@@ -744,11 +672,11 @@ def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(requir
                 label = _vol_label(v["series"], v["volume"])
                 href = f"{ob}/smart/{quote(slug)}/vol?series={quote(v['series'], safe='')}&volume={quote(v['volume'], safe='')}"
                 entries.append(tpl.render(
-                    entry_id=f"{base}{abs_url(href)}",
+                    entry_id=f"{BASE}{abs_url(href)}",
                     updated=updated_ts,
                     title=f"{label} ({v['issue_count']})",
                     is_dir=True,
-                    href_abs=f"{base}{abs_url(href)}",
+                    href_abs=f"{BASE}{abs_url(href)}",
                 ))
             xml = feed(entries, title=sl["name"],
                        self_href=f"{ob}/smart/{quote(slug)}",
@@ -824,7 +752,6 @@ def opds_smart_list_volume(
     page: int = 1,
     _=Depends(require_basic),
 ):
-    """Show issues for a specific series+volume within a smart list."""
     lists = _load_smartlists()
     sl = next((x for x in lists if x.get("slug") == slug), None)
     if not sl:

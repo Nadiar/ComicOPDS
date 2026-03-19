@@ -34,6 +34,7 @@
         <span class="navbar-text small text-secondary me-2">
           <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
           • Errors: <a id="errLink" href="#" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
+          <a id="errClear" href="#" class="link-secondary text-decoration-none small" style="display:none" title="Clear error log"><i class="bi bi-x-circle"></i></a>
           <!-- NEW: live page cache status -->
           • Cache: <span id="cacheStatus" class="badge text-bg-light cache-pill">—</span>
         </span>
@@ -267,7 +268,10 @@
     };
     const charts = {};
     function upsertChart(id, cfg){ const e=Chart.getChart(id)||charts[id]; if(e) e.destroy(); const el=document.getElementById(id); if(!el) return null; return charts[id]=new Chart(el, cfg); }
-    async function jget(u){ const r=await fetch(u,{credentials:'include'}); if(!r.ok) throw Error(r.status); return r.json(); }
+    const xhrHeaders = { 'X-Requested-With': 'XMLHttpRequest' };
+
+    async function jget(u){ const r=await fetch(u,{credentials:'include', headers:xhrHeaders}); if(!r.ok) throw Error(r.status); return r.json(); }
+    function escapeHtml(s){ const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
 
     function mapPublishers(d){ const a=Array.isArray(d.top_publishers)?d.top_publishers:[]; return {labels:a.map(x=>x.publisher??'(Unknown)'),values:a.map(x=>x.count??x.c??0)}; }
     function mapTimeline(d){ const l=(d.timeline_by_year||[]).filter(x=>x.year!=null).sort((a,b)=>(+a.year)-(+b.year)); return {labels:l.map(x=>String(x.year)),values:l.map(x=>x.count??0)}; }
@@ -349,26 +353,39 @@
             roleBadge = '<span class="badge text-bg-danger" title="Master Admin Configured via ENV">Primary Admin</span>';
           }
 
-          let actionBtns = '';
+          // Build cells using safe DOM methods for user-controlled data
+          const tdId = document.createElement("td");
+          tdId.textContent = u.id;
+          const tdName = document.createElement("td");
+          tdName.className = "fw-semibold";
+          tdName.textContent = u.username;
+          const tdRole = document.createElement("td");
+          tdRole.innerHTML = roleBadge;
+          const tdActions = document.createElement("td");
+          tdActions.className = "text-end";
+
           if (u.id !== 1) {
-            actionBtns = `
-              <button class="btn btn-sm btn-outline-secondary me-1" onclick="prepareUserModal('edit', ${u.id}, '${u.username}', ${u.is_admin})">
-                <i class="bi bi-pencil-square"></i>
-              </button>
-              <button class="btn btn-sm btn-outline-danger" onclick="deleteUser(${u.id}, '${u.username}')">
-                <i class="bi bi-trash"></i>
-              </button>
-            `;
+            const editBtn = document.createElement("button");
+            editBtn.className = "btn btn-sm btn-outline-secondary me-1";
+            editBtn.innerHTML = '<i class="bi bi-pencil-square"></i>';
+            editBtn.addEventListener('click', () => prepareUserModal('edit', u.id, u.username, u.is_admin));
+            const delBtn = document.createElement("button");
+            delBtn.className = "btn btn-sm btn-outline-danger";
+            delBtn.innerHTML = '<i class="bi bi-trash"></i>';
+            delBtn.addEventListener('click', () => deleteUser(u.id, u.username));
+            tdActions.appendChild(editBtn);
+            tdActions.appendChild(delBtn);
           } else {
-             actionBtns = '<span class="small text-muted fst-italic">Managed via Docker ENV</span>';
+            const span = document.createElement("span");
+            span.className = "small text-muted fst-italic";
+            span.textContent = "Managed via Docker ENV";
+            tdActions.appendChild(span);
           }
 
-          tr.innerHTML = `
-            <td>${u.id}</td>
-            <td class="fw-semibold">${u.username}</td>
-            <td>${roleBadge}</td>
-            <td class="text-end">${actionBtns}</td>
-          `;
+          tr.appendChild(tdId);
+          tr.appendChild(tdName);
+          tr.appendChild(tdRole);
+          tr.appendChild(tdActions);
           tbody.appendChild(tr);
         });
       } catch (e) {
@@ -416,7 +433,7 @@
         if (mode === 'create') {
           resp = await fetch('/api/users', {
             method: 'POST',
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type': 'application/json', ...xhrHeaders},
             body: JSON.stringify({username, password, is_admin})
           });
         } else {
@@ -424,7 +441,7 @@
           if (password) payload.password = password;
           resp = await fetch('/api/users/' + id, {
             method: 'PUT',
-            headers: {'Content-Type': 'application/json'},
+            headers: {'Content-Type': 'application/json', ...xhrHeaders},
             body: JSON.stringify(payload)
           });
         }
@@ -444,7 +461,7 @@
     async function deleteUser(id, username) {
       if (!confirm(`Are you sure you want to delete user '${username}'?`)) return;
       try {
-        const resp = await fetch('/api/users/' + id, { method: 'DELETE' });
+        const resp = await fetch('/api/users/' + id, { method: 'DELETE', headers: xhrHeaders });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         loadUsers();
       } catch (err) {
@@ -543,6 +560,11 @@
       ev.preventDefault();
       downloadErrors();
     });
+    document.getElementById("errClear").addEventListener("click", async (ev) => {
+      ev.preventDefault();
+      if (!confirm("Clear thumb error log?")) return;
+      await fetch("/thumbs/errors/clear", { method: "POST", credentials: "include", headers: xhrHeaders });
+    });
 
     // ----- Buttons -----
     function showIndexPending() {
@@ -571,7 +593,7 @@
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Starting…';
         showThumbsPending();
-        await fetch("/admin/thumbs/precache", { method: "POST", credentials: "include" });
+        await fetch("/admin/thumbs/precache", { method: "POST", credentials: "include", headers: xhrHeaders });
         setTimeout(pollThumbs, 200);
       } catch (e) {
         alert("Failed to start thumbnails pre-cache: " + (e?.message || e));
@@ -590,7 +612,7 @@
         btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> ${label}ing…`;
         showIndexPending();
         const url = force ? "/admin/reindex?force=true" : "/admin/reindex";
-        await fetch(url, { method: "POST", credentials: "include" });
+        await fetch(url, { method: "POST", credentials: "include", headers: xhrHeaders });
         setTimeout(pollIndex, 200);
       } catch (e) {
         alert("Reindex failed: " + (e?.message || e));
@@ -624,7 +646,7 @@
       btn.disabled = true;
       btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1" role="status" aria-hidden="true"></span> Cleaning…';
       try {
-        const resp = await fetch("/admin/pages/cleanup", { method:"POST", credentials:"include" });
+        const resp = await fetch("/admin/pages/cleanup", { method:"POST", credentials:"include", headers: xhrHeaders });
         const data = await resp.json().catch(()=>({}));
         // toast
         const toastEl = document.getElementById('toast');
@@ -657,6 +679,7 @@
         const el = document.getElementById("errCount");
         el.textContent = n;
         el.parentElement.classList.toggle("link-danger", n>0);
+        document.getElementById("errClear").style.display = n>0 ? "" : "none";
         delay = n>0 ? 5000 : 15000;
       }).catch(()=>{ delay=15000; }).finally(()=>setTimeout(pollErrors, delay));
     })();

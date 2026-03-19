@@ -9,13 +9,13 @@ import unicodedata
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Dict
-from xml.etree import ElementTree as ET
+from typing import Any
+import defusedxml.ElementTree as ET
 
 from . import db
 from .config import LIBRARY_DIR, PRECACHE_THUMBS, THUMB_WORKERS
 from .page_cache import cbz_list_pages
-from .thumbs import generate_thumb
+from .thumbs import ERROR_LOG, generate_thumb
 
 logger = logging.getLogger("comicopds")
 
@@ -56,11 +56,7 @@ _CP1252_MAP: dict[int, str] = {
 
 
 def normalize_text(text: str) -> str:
-    """Normalize Unicode text for safe storage and XML/JSON output.
-
-    Applies NFC normalization, maps stray Windows-1252 C1 control characters
-    to their proper Unicode equivalents, and strips replacement characters.
-    """
+    """Normalize Unicode text: NFC, fix Windows-1252 C1 chars, strip replacements."""
     text = text.translate({k: v for k, v in _CP1252_MAP.items()})
     text = unicodedata.normalize("NFC", text)
     text = text.replace("\ufffd", "")
@@ -83,13 +79,9 @@ def parent_rel(rel: str) -> str:
     return "" if "/" not in rel else rel.rsplit("/", 1)[0]
 
 
-def read_comicinfo(cbz_path: Path) -> Dict[str, Any]:
-    """Read ComicInfo.xml metadata from a CBZ file.
-
-    Extracts metadata from the ComicInfo.xml file embedded in a CBZ archive.
-    Returns an empty dictionary if the XML file is not found or parsing fails.
-    """
-    meta: Dict[str, Any] = {}
+def read_comicinfo(cbz_path: Path) -> dict[str, Any]:
+    """Extract ComicInfo.xml metadata from a CBZ file."""
+    meta: dict[str, Any] = {}
     try:
         with zipfile.ZipFile(cbz_path, "r") as zf:
             xml_name = None
@@ -129,7 +121,6 @@ def run_scan(force: bool = False):
     logger.info(f"Starting {'full' if force else 'incremental'} filesystem scan of {LIBRARY_DIR}")
     conn = db.connect()
     try:
-        db.begin_scan(conn)
         set_status(running=True, phase="counting", done=0, total=0, current="", started_at=time.time(), ended_at=0.0)
 
         scan_stats = {"new": 0, "updated": 0, "skipped": 0, "errors": 0}
@@ -216,6 +207,10 @@ def run_scan(force: bool = False):
             logger.info("Removed %d deleted items from database", removed)
         db.prune_stale(conn)
 
+        # Reset ad-hoc directory check timestamps after a full scan
+        with _DIR_CHECK_LOCK:
+            _DIR_CHECKED.clear()
+
         if PRECACHE_THUMBS:
             logger.info("Pre-caching thumbnails...")
             set_status(phase="thumbnails")
@@ -270,6 +265,13 @@ def run_precache_thumbs(workers: int):
     with THUMB_LOCK:
         THUMB_STATUS.update({"running": True, "total": 0, "done": 0, "started_at": time.time(), "ended_at": 0.0})
 
+    # Clear stale error log — precache retries everything
+    try:
+        if ERROR_LOG.exists():
+            ERROR_LOG.unlink()
+    except OSError:
+        pass
+
     items = collect_cbz_rows()
     total = len(items)
     with THUMB_LOCK:
@@ -294,6 +296,90 @@ def start_scan(force=False):
         return
     t = threading.Thread(target=run_scan, args=(force,), daemon=True)
     t.start()
+
+
+# -------------------- Ad-hoc directory refresh --------------------
+
+_DIR_CHECKED: dict[str, float] = {}
+_DIR_CHECK_LOCK = threading.Lock()
+DIR_REFRESH_INTERVAL = float(os.getenv("DIR_REFRESH_INTERVAL", "300"))  # seconds
+
+
+def refresh_directory(dir_rel: str) -> bool:
+    """Non-recursive refresh of a single directory if stale. Returns True if changed."""
+    now = time.time()
+    with _DIR_CHECK_LOCK:
+        last = _DIR_CHECKED.get(dir_rel, 0.0)
+        if now - last < DIR_REFRESH_INTERVAL:
+            return False
+        _DIR_CHECKED[dir_rel] = now
+
+    # Don't run during a full scan
+    if INDEX_STATUS["running"]:
+        return False
+
+    abs_dir = (LIBRARY_DIR / dir_rel) if dir_rel else LIBRARY_DIR
+    if not abs_dir.is_dir():
+        return False
+
+    conn = db.connect()
+    changed = False
+    try:
+        # Current DB children for this directory
+        db_children = {
+            r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0), int(r["page_count"] or 0))
+            for r in conn.execute(
+                "SELECT rel, mtime, size, page_count FROM items WHERE parent=?",
+                (dir_rel,),
+            ).fetchall()
+        }
+
+        fs_rels = set()
+        for entry in os.scandir(abs_dir):
+            if entry.is_dir(follow_symlinks=False):
+                rel = entry.path.replace("\\", "/")
+                rel = Path(rel).relative_to(LIBRARY_DIR).as_posix()
+                fs_rels.add(rel)
+                if rel not in db_children:
+                    db.upsert_dir(conn, rel=rel, name=entry.name,
+                                  parent=dir_rel, mtime=entry.stat().st_mtime)
+                    changed = True
+            elif entry.is_file(follow_symlinks=False) and entry.name.lower().endswith(".cbz"):
+                rel = Path(entry.path.replace("\\", "/")).relative_to(LIBRARY_DIR).as_posix()
+                fs_rels.add(rel)
+                st = entry.stat()
+                existing = db_children.get(rel)
+                if existing and existing[0] == float(st.st_mtime) and existing[1] == int(st.st_size) and existing[2] > 0:
+                    continue  # unchanged
+                # New or updated file
+                try:
+                    page_count = len(cbz_list_pages(Path(entry.path)))
+                except Exception:
+                    page_count = 0
+                db.upsert_file(conn, rel=rel, name=Path(entry.name).stem,
+                               size=st.st_size, mtime=st.st_mtime,
+                               parent=dir_rel, ext="cbz", page_count=page_count)
+                meta = read_comicinfo(Path(entry.path))
+                if meta:
+                    db.upsert_meta(conn, rel=rel, meta=meta)
+                changed = True
+
+        # Remove DB entries that no longer exist on disk
+        deleted = set(db_children.keys()) - fs_rels
+        if deleted:
+            for rel in deleted:
+                conn.execute("DELETE FROM items WHERE rel=?", (rel,))
+                conn.execute("DELETE FROM meta WHERE rel=?", (rel,))
+            changed = True
+
+        if changed:
+            conn.commit()
+            logger.info("refresh_directory(%s): updated index", dir_rel or "/")
+    except Exception:
+        logger.debug("refresh_directory(%s) error", dir_rel, exc_info=True)
+    finally:
+        conn.close()
+    return changed
 
 
 def index_single_file(conn, abs_path: Path) -> int:

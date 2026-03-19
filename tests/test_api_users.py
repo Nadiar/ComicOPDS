@@ -2,12 +2,17 @@
 import pytest
 import sqlite3
 from pathlib import Path
-import json
 
 
 @pytest.mark.integration
 class TestUserManagement:
     """Tests for user management API endpoints."""
+
+    @staticmethod
+    def _csrf_headers(auth_headers: dict[str, str]) -> dict[str, str]:
+        headers = dict(auth_headers)
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        return headers
 
     @pytest.fixture
     def client_with_data(self, client, test_library_dir, test_db, monkeypatch):
@@ -47,14 +52,14 @@ class TestUserManagement:
             "password": "newpass123",
             "is_admin": False
         }
-        response = client_with_data.post("/api/users", json=payload, headers=auth_headers)
+        response = client_with_data.post("/api/users", json=payload, headers=self._csrf_headers(auth_headers))
 
         assert response.status_code in [200, 201]
 
     def test_delete_user(self, client_with_data, auth_headers):
         """DELETE /api/users/{username} removes user or returns error."""
         # Try to delete a user - may not exist so test the endpoint exists
-        response = client_with_data.delete("/api/users/testuser", headers=auth_headers)
+        response = client_with_data.delete("/api/users/testuser", headers=self._csrf_headers(auth_headers))
 
         # Should either succeed or return appropriate error
         assert response.status_code in [200, 204, 404, 403, 422]

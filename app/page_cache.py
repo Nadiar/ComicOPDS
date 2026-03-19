@@ -22,7 +22,6 @@ VALID_PAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".t
 
 
 def cbz_list_pages(cbz_path: Path) -> list[str]:
-    """List image entries in a CBZ file, natural-sorted."""
     with zipfile.ZipFile(cbz_path, "r") as zf:
         names = [n for n in zf.namelist()
                  if Path(n).suffix.lower() in VALID_PAGE_EXTS and not n.endswith("/")]
@@ -35,15 +34,13 @@ def cbz_list_pages(cbz_path: Path) -> list[str]:
 
 
 def book_cache_dir(rel_path: str) -> Path:
-    """Get or create a cache directory for a book's extracted pages."""
-    h = hashlib.sha1(rel_path.encode("utf-8")).hexdigest()
+    h = hashlib.sha256(rel_path.encode("utf-8")).hexdigest()
     d = PAGE_CACHE_DIR / h
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 def ensure_page_jpeg(cbz_path: Path, inner_name: str, dest: Path) -> Path:
-    """Extract a page from a CBZ and save as JPEG. Returns dest path."""
     if dest.exists():
         return dest
     with zipfile.ZipFile(cbz_path, "r") as zf:
@@ -73,7 +70,6 @@ def _dir_size(p: Path) -> int:
 
 
 def _book_cache_entries() -> list[tuple[Path, float, int]]:
-    """Returns list of (dir_path, last_mtime, size_bytes) for each book cache dir."""
     entries = []
     if not PAGE_CACHE_DIR.exists():
         return entries
@@ -94,7 +90,6 @@ def _book_cache_entries() -> list[tuple[Path, float, int]]:
 
 
 def _remove_dir(p: Path) -> int:
-    """Remove directory tree, return bytes freed (best-effort)."""
     size = 0
     try:
         size = _dir_size(p)
@@ -119,7 +114,6 @@ def _remove_dir(p: Path) -> int:
 
 
 def clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
-    """Evict page cache entries by TTL and size cap."""
     now = time.time()
     ttl_secs = max(0, int(ttl_days)) * 86400
     entries = _book_cache_entries()
@@ -152,7 +146,6 @@ def clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
 
 
 def page_cache_status() -> dict:
-    """Return current page cache statistics."""
     entries = _book_cache_entries()
     return {
         "dir_count": len(entries),
@@ -164,7 +157,6 @@ def page_cache_status() -> dict:
 
 
 def autoclean_loop():
-    """Background loop that periodically cleans the page cache."""
     while True:
         try:
             clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)

@@ -84,6 +84,31 @@ The server remains responsive during indexing and handles concurrent OPDS reques
 
 ---
 
+## 📖 Page Streaming: OPDS PSE vs DiViNa
+
+ComicOPDS supports two page streaming protocols, selected automatically based on the OPDS version negotiated with the client:
+
+| OPDS Version | Protocol | Specification |
+| --- | --- | --- |
+| OPDS 1.2 (Atom XML) | **OPDS PSE 1.1** | [OPDS Page Streaming Extension](https://anansi-project.github.io/docs/opds-pse/specs/v1.1) — an XML namespace extension for Atom feeds |
+| OPDS 2.0 (JSON) | **DiViNa / RWPM** | [Readium Web Publication Manifest — DiViNa profile](https://readium.org/webpub-manifest/profiles/divina) |
+
+### What is DiViNa?
+
+**DiViNa (Digital Visual Narratives)** is a profile of the [Readium Web Publication Manifest](https://readium.org/webpub-manifest/) format, defined by the Readium Foundation. It is **not part of the OPDS 2.0 specification itself** — it is a separate standard that OPDS 2.0 references as the recommended way to enable page-level streaming for visual content (comics, manga, webtoons).
+
+The relationship between the specs:
+
+- **OPDS 2.0** — the catalog/feed specification for discovering and listing publications (JSON-based)
+- **Readium Web Publication Manifest (RWPM)** — the base format for describing a publication's structure and resources
+- **DiViNa** — a RWPM profile that defines how to represent sequential image-based content (reading order, reading progression, overflow behavior)
+
+OPDS PSE 1.1 is an XML namespace extension and cannot be used in JSON feeds, so OPDS 2.0 clients use DiViNa manifests instead. Both protocols ultimately serve the same page images from the same endpoint — only the discovery and manifest format differs.
+
+In ComicOPDS, the `/opds/v2/manifest?path=...` endpoint generates DiViNa-compliant manifests with a `readingOrder` array containing one image link per page.
+
+---
+
 ## 🔗 Links
 
 - **Repository**: [Gitea](https://gitea.baerentsen.space/FrederikBaerentsen/ComicOPDS)

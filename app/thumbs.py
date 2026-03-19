@@ -1,50 +1,43 @@
-# app/thumbs.py
 from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import warnings
 import zipfile
 from pathlib import Path
-from typing import Optional
 
 from PIL import Image, UnidentifiedImageError
 
 from .config import LIBRARY_DIR
 
 logger = logging.getLogger("comicopds")
-warnings.simplefilter("ignore", UserWarning)  # silence noisy EXIF warnings
+warnings.simplefilter("ignore", UserWarning)
 ERROR_LOG = Path("/data/thumbs_errors.log")
 
 THUMBS_DIR = Path("/data/thumbs")
 THUMBS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Keep consistent naming if we have a ComicVine issue id
-def _thumb_name(rel: str, comicvine_issue: Optional[str]) -> str:
+def _thumb_name(rel: str, comicvine_issue: str | None) -> str:
     if comicvine_issue:
         safe = "".join(c for c in comicvine_issue if c.isalnum() or c in ("-", "_"))
         if not safe:
             safe = comicvine_issue
         return f"{safe}.jpg"
-    # stable fallback by path hash
-    h = hashlib.sha1(rel.encode("utf-8")).hexdigest()
+    h = hashlib.sha256(rel.encode("utf-8")).hexdigest()
     return f"{h}.jpg"
 
 def _cover_candidate_names():
-    # common cover file names (lowercased)
     return (
         "cover.jpg", "cover.jpeg", "cover.png", "000.jpg", "001.jpg", "0001.jpg", "1.jpg",
         "front.jpg", "folder.jpg"
     )
 
 def _choose_cover_name(names: list[str]) -> str:
-    # pick best candidate; otherwise first image by natural order
     lower = {n.lower(): n for n in names}
     for key in _cover_candidate_names():
         if key in lower:
             return lower[key]
-    # natural sort by numeric chunks
-    import re
     def natkey(s: str):
         return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
     images = [n for n in names if not n.endswith("/")]
@@ -55,19 +48,15 @@ def _list_image_entries(zf: zipfile.ZipFile) -> list[str]:
     valid = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff"}
     return [n for n in zf.namelist() if Path(n).suffix.lower() in valid and not n.endswith("/")]
 
-def have_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """Check if thumbnail already exists on disk, return path if found."""
+def have_thumb(rel: str, comicvine_issue: str | None) -> Path | None:
     p = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
     return p if p.exists() else None
 
 def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
-    """Save image as JPEG, converting to RGB if needed and resizing if oversized."""
     im = src_img
     if im.mode != "RGB":
         im = im.convert("RGB")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # reasonable default size/quality; tweak if you wish
-    # resize if huge (e.g., keep max dimension ≈ 1200px to save space)
     max_dim = 1200
     w, h = im.size
     if max(w, h) > max_dim:
@@ -80,19 +69,13 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     im.save(dest, format="JPEG", quality=88, optimize=True)
     return dest
 
-def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """Generate and cache thumbnail from CBZ cover image.
-
-    Returns the thumbnail path if successful, None on any error.
-    Logs errors to /data/thumbs_errors.log via _log_thumb_error().
-    """
+def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: str | None) -> Path | None:
+    """Generate and cache thumbnail from CBZ cover image. Returns path or None."""
     out = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
 
-    # Already there?
     if out.exists():
         return out
 
-    # Missing source
     if not abs_cbz_path.exists() or not abs_cbz_path.is_file():
         _log_thumb_error(rel, FileNotFoundError(f"CBZ not found: {abs_cbz_path}"))
         return None
@@ -135,9 +118,7 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: Optional[str])
         _log_thumb_error(rel, e)
         return None
 
-def ensure_thumb(rel: str, comicvine_issue: Optional[str]) -> Optional[Path]:
-    """Ensure thumbnail exists for item, generating it if necessary.
-    """
+def ensure_thumb(rel: str, comicvine_issue: str | None) -> Path | None:
     existing = have_thumb(rel, comicvine_issue)
     if existing:
         return existing

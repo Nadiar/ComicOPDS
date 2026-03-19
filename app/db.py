@@ -1,22 +1,23 @@
-# app/db.py
 from __future__ import annotations
 
 import re
 import sqlite3
 import time
+import logging
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any
 
 DB_PATH = Path("/data/library.db")
 
 HAS_FTS5: bool = False
+_VALID_TABLES = frozenset({"items", "meta", "fts", "users"})
+
+logger = logging.getLogger("comicopds")
 
 def has_fts5() -> bool:
-    """Check if SQLite FTS5 extension is available."""
     return HAS_FTS5
 
 def connect() -> sqlite3.Connection:
-    """Create and return a new SQLite database connection with schema initialization."""
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try: conn.execute("PRAGMA journal_mode=WAL;")
@@ -31,10 +32,14 @@ def connect() -> sqlite3.Connection:
     return conn
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    if table not in _VALID_TABLES:
+        raise ValueError(f"Invalid table: {table}")
     row = conn.execute(f"PRAGMA table_info({table})").fetchall()
     return any(r[1].lower() == column.lower() for r in row)
 
 def _add_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    if table not in _VALID_TABLES:
+        raise ValueError(f"Invalid table: {table}")
     try:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
     except sqlite3.OperationalError:
@@ -116,12 +121,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     """)
 
 def seed_admin_user(username: str, password: str) -> None:
-    """Seed the default admin user (ID=1) if it doesn't exist.
-
-    Args:
-        username: Admin username from environment
-        password: Admin password from environment (plaintext, will be hashed)
-    """
+    """Seed the default admin user (ID=1) if it doesn't exist."""
     import bcrypt
 
     conn = connect()
@@ -139,29 +139,12 @@ def seed_admin_user(username: str, password: str) -> None:
 
 # ----------------------------- Scan lifecycle ---------------------------------
 
-def get_existing_items_mtime(conn: sqlite3.Connection) -> Dict[str, tuple[float, int, int]]:
-    """Get all current items with their modification times, sizes, and page counts.
-
-    Returns:
-        Dictionary mapping rel paths to (mtime, size, page_count) tuples for incremental scan comparison.
-    """
+def get_existing_items_mtime(conn: sqlite3.Connection) -> dict[str, tuple[float, int, int]]:
     rows = conn.execute("SELECT rel, mtime, size, page_count FROM items").fetchall()
     return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0), int(r["page_count"] or 0)) for r in rows}
 
-def begin_scan(conn: sqlite3.Connection) -> None:
-    # No longer deletes everything; this is an incremental scan.
-    pass
-
 def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> int:
-    """Remove items from database that are no longer present on disk.
-
-    Args:
-        conn: SQLite connection
-        current_rels: Set of rel paths that currently exist on filesystem
-
-    Returns:
-        Number of items removed from database.
-    """
+    """Remove DB items no longer present on disk. Returns count removed."""
     rows = conn.execute("SELECT rel FROM items").fetchall()
     db_rels = {r["rel"] for r in rows}
 
@@ -181,7 +164,6 @@ def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> i
     return len(missing)
 
 def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime: float) -> None:
-    """Insert or update a directory entry in the database."""
     conn.execute(
         """
         INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext)
@@ -196,7 +178,6 @@ def upsert_dir(conn: sqlite3.Connection, rel: str, name: str, parent: str, mtime
     )
 
 def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime: float, parent: str, ext: str, page_count: int = 0) -> None:
-    """Insert or update a file entry in the database."""
     conn.execute(
         """
         INSERT INTO items(rel, name, parent, is_dir, size, mtime, ext, page_count)
@@ -213,8 +194,7 @@ def upsert_file(conn: sqlite3.Connection, rel: str, name: str, size: int, mtime:
         (rel, name, parent, size, mtime, ext, page_count),
     )
 
-def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> None:
-    """Insert or update comic metadata (from ComicInfo.xml) for an item."""
+def upsert_meta(conn: sqlite3.Connection, rel: str, meta: dict[str, Any]) -> None:
     cols = [
         "title","series","number","volume","year","month","day",
         "writer","publisher","summary","genre","tags","characters",
@@ -239,7 +219,7 @@ def upsert_meta(conn: sqlite3.Connection, rel: str, meta: Dict[str, Any]) -> Non
         if not it or int(it["is_dir"]) != 0:
             return
 
-        parts: List[str] = []
+        parts: list[str] = []
         def add(x):
             if x is not None:
                 s = str(x).strip()
@@ -297,11 +277,7 @@ def children_page(conn: sqlite3.Connection, path: str, limit: int, offset: int):
         return conn.execute(sql, (path, limit, offset)).fetchall()
 
 def feed_kind(conn: sqlite3.Connection, path: str) -> str:
-    """Classify a feed as navigation or acquisition based on its direct children.
-
-    A folder containing only file entries is an acquisition feed. All other cases,
-    including empty or mixed folders, are treated as navigation feeds for safety.
-    """
+    """Return 'acquisition' if path contains only files, else 'navigation'."""
     if path == "":
         row = conn.execute(
             """
@@ -340,7 +316,6 @@ def get_item(conn: sqlite3.Connection, rel: str):
 
 
 def get_item_by_id(conn: sqlite3.Connection, item_id: int):
-    """Look up an item by its SQLite rowid."""
     return conn.execute("""
         SELECT i.rowid AS id, i.*, m.*
         FROM items i
@@ -349,7 +324,6 @@ def get_item_by_id(conn: sqlite3.Connection, item_id: int):
     """, (item_id,)).fetchone()
 
 def last_modified(conn: sqlite3.Connection) -> float:
-    """Get the timestamp of the most recently modified item in the database."""
     result = conn.execute("SELECT MAX(mtime) FROM items").fetchone()
     if result and result[0]:
         return float(result[0])
@@ -359,7 +333,7 @@ def last_modified(conn: sqlite3.Connection) -> float:
 
 _year_re = re.compile(r"\b(19|20)\d{2}\b")
 
-def _split_query(q: str) -> Tuple[List[str], List[str]]:
+def _split_query(q: str) -> tuple[list[str], list[str]]:
     tokens = re.findall(r"[A-Za-z0-9]+", q or "")
     years  = [t for t in tokens if _year_re.fullmatch(t)]
     words  = [t for t in tokens if t not in years]
@@ -371,8 +345,8 @@ def _like_term(s: str) -> str:
 def _search_where(q: str) -> tuple[str, list]:
     """Build WHERE clause and params for search queries."""
     words, years = _split_query(q)
-    params: List[Any] = []
-    where: List[str] = ["i.is_dir=0"]
+    params: list[Any] = []
+    where: list[str] = ["i.is_dir=0"]
 
     if HAS_FTS5 and words:
         match = " AND ".join([f"{w}*" for w in words])
@@ -400,7 +374,6 @@ def _search_where(q: str) -> tuple[str, list]:
 
 
 def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
-    """Execute full-text search query against indexed content."""
     where_clause, params = _search_where(q)
     sql = f"""
     SELECT i.rowid AS id, i.*, m.*
@@ -417,7 +390,6 @@ def search_q(conn: sqlite3.Connection, q: str, limit: int, offset: int):
     return conn.execute(sql, params).fetchall()
 
 def search_count(conn: sqlite3.Connection, q: str) -> int:
-    """Get total count of full-text search results."""
     where_clause, params = _search_where(q)
     row = conn.execute(f"""
         SELECT COUNT(*)
@@ -429,7 +401,7 @@ def search_count(conn: sqlite3.Connection, q: str) -> int:
 
 # ----------------------------- Smart Lists ------------------------------------
 
-FIELD_MAP: Dict[str, str] = {
+FIELD_MAP: dict[str, str] = {
     "title": "m.title",
     "series": "m.series",
     "number": "m.number",
@@ -456,15 +428,15 @@ def _like_escape(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 def _sql_expr_for_field(field: str) -> str:
-    col = FIELD_MAP.get(field, f"m.{field}")
+    col = FIELD_MAP.get(field)
+    if col is None:
+        raise ValueError(f"Unknown smart list field: {field!r}")
     if field in NUMERIC_FIELDS:
         return f"CAST(NULLIF({col},'') AS INTEGER)"
     return col
 
-def build_smartlist_where(spec_or_groups: Any) -> Tuple[str, List[Any]]:
-    """
-    Groups are OR'd by default. Rules inside a group are AND'd.
-    """
+def build_smartlist_where(spec_or_groups: Any) -> tuple[str, list[Any]]:
+    """Groups are OR'd by default. Rules inside a group are AND'd."""
     if isinstance(spec_or_groups, dict):
         groups = spec_or_groups.get("groups") or []
         across = (spec_or_groups.get("join") or "OR").upper()  # <<< default OR
@@ -475,12 +447,12 @@ def build_smartlist_where(spec_or_groups: Any) -> Tuple[str, List[Any]]:
     if across not in ("AND", "OR"):
         across = "OR"
 
-    where_parts: List[str] = []
-    params: List[Any] = []
+    where_parts: list[str] = []
+    params: list[Any] = []
 
     for g in groups:
         rules = g.get("rules") or []
-        rule_sqls: List[str] = []
+        rule_sqls: list[str] = []
 
         for r in rules:
             field = (r.get("field") or "").strip()
@@ -491,7 +463,11 @@ def build_smartlist_where(spec_or_groups: Any) -> Tuple[str, List[Any]]:
             if not field or op == "":
                 continue
 
-            expr = _sql_expr_for_field(field)
+            try:
+                expr = _sql_expr_for_field(field)
+            except ValueError:
+                logger.warning("Skipping smart list rule with unknown field: %s", field)
+                continue
 
             if field in NUMERIC_FIELDS:
                 try:
@@ -547,13 +523,9 @@ _TEXT_FIELDS_FOR_FTS = {
     "tags","characters","teams","locations","name","filename","format"
 }
 
-def _fts_group_expr_from_rules(rules: List[Dict[str, Any]]) -> Optional[str]:
-    """
-    Build an FTS 'group' expression like: "batman* AND 2016*"
-    Only from rules that are: field in text set, op in ('contains','~'), not negated, and string values.
-    If the group has zero qualifying rules, return None (we'll skip FTS prefilter to avoid over-restricting).
-    """
-    tokens: List[str] = []
+def _fts_group_expr_from_rules(rules: list[dict[str, Any]]) -> str | None:
+    """Build an FTS group expression from text-contains rules, or None if not applicable."""
+    tokens: list[str] = []
     for r in (rules or []):
         field = (r.get("field") or "").lower()
         op    = (r.get("op") or "").lower()
@@ -564,16 +536,11 @@ def _fts_group_expr_from_rules(rules: List[Dict[str, Any]]) -> Optional[str]:
         return None
     return " AND ".join(f"{t}*" for t in tokens)
 
-def _build_fts_prefilter(groups: List[Dict[str, Any]]) -> Tuple[str, List[Any]]:
-    """
-    Returns (fts_sql_fragment, params). If any group cannot be expressed in FTS, returns ("", []) to skip prefilter.
-    Otherwise returns:
-        AND i.rel IN (SELECT rel FROM fts WHERE fts MATCH ?)
-    with a parameter like: "(g1expr) OR (g2expr) OR ..."
-    """
+def _build_fts_prefilter(groups: list[dict[str, Any]]) -> tuple[str, list[Any]]:
+    """Build an FTS prefilter SQL fragment, or ("", []) if not applicable."""
     if not HAS_FTS5:
         return "", []
-    exprs: List[str] = []
+    exprs: list[str] = []
     for g in (groups or []):
         expr = _fts_group_expr_from_rules(g.get("rules") or [])
         if expr is None:
@@ -617,15 +584,14 @@ def _order_by_for_sort(sort: str) -> str:
 
 # ---- Smartlist runners --------------------------------------------------------
 
-def smartlist_query(  # pylint: disable=too-many-branches
+def smartlist_query(
     conn: sqlite3.Connection,
-    groups: List[Dict[str, Any]],
+    groups: list[dict[str, Any]],
     sort: str,
     limit: int,
     offset: int,
-    distinct_by_series: Any
+    distinct_by_series: Any,
 ):
-    """Execute smart list query with filtering and pagination."""
     where, params = build_smartlist_where(groups)
     order_clause = _order_by_for_sort(sort)
 
@@ -688,8 +654,7 @@ def smartlist_query(  # pylint: disable=too-many-branches
     """
     return conn.execute(sql, (*params, *fts_params, limit, offset)).fetchall()
 
-def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> int:
-    """Get total count of items matching smart list filters."""
+def smartlist_count(conn: sqlite3.Connection, groups: list[dict[str, Any]]) -> int:
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     row = conn.execute(f"""
@@ -701,12 +666,8 @@ def smartlist_count(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> i
     return int(row[0]) if row else 0
 
 
-def smartlist_volumes(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) -> list:
-    """Return distinct (series, volume, count) combos matching smart list filters.
-
-    Used for group_by=series_volume to render virtual folders.
-    Sorted by series name, then volume.
-    """
+def smartlist_volumes(conn: sqlite3.Connection, groups: list[dict[str, Any]]) -> list:
+    """Return distinct (series, volume, count) combos for virtual folder rendering."""
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     rows = conn.execute(f"""
@@ -726,14 +687,13 @@ def smartlist_volumes(conn: sqlite3.Connection, groups: List[Dict[str, Any]]) ->
 
 def smartlist_query_for_volume(
     conn: sqlite3.Connection,
-    groups: List[Dict[str, Any]],
+    groups: list[dict[str, Any]],
     series: str,
     volume: str,
     sort: str,
     limit: int,
     offset: int,
 ):
-    """Query smart list results filtered to a specific series+volume."""
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     order_clause = _order_by_for_sort(sort)
@@ -752,11 +712,10 @@ def smartlist_query_for_volume(
 
 def smartlist_count_for_volume(
     conn: sqlite3.Connection,
-    groups: List[Dict[str, Any]],
+    groups: list[dict[str, Any]],
     series: str,
     volume: str,
 ) -> int:
-    """Count smart list results for a specific series+volume."""
     where, params = build_smartlist_where(groups)
     fts_sql, fts_params = _build_fts_prefilter(groups)
     row = conn.execute(f"""
@@ -771,9 +730,8 @@ def smartlist_count_for_volume(
 
 # ----------------------------- Stats ------------------------------------------
 
-def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
-    """Get library statistics (item counts, storage size, etc.)."""
-    out: Dict[str, Any] = {}
+def stats(conn: sqlite3.Connection) -> dict[str, Any]:
+    out: dict[str, Any] = {}
 
     out["total_comics"] = conn.execute(
         "SELECT COUNT(*) FROM items WHERE is_dir=0"
@@ -844,7 +802,7 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
         "graphic novel":"graphic novel",
         "web":"web","digital":"digital"
     }
-    counts: Dict[str,int] = {}
+    counts: dict[str, int] = {}
     for r in rows:
         key = (r["fmt"] or "").strip() or "(unknown)"
         key = alias.get(key, key)
@@ -864,7 +822,7 @@ def stats(conn: sqlite3.Connection) -> Dict[str, Any]:
          WHERE i.is_dir=0 AND m.writer IS NOT NULL AND TRIM(m.writer)!=''
     """).fetchall()
 
-    counts_w: Dict[str, int] = {}
+    counts_w: dict[str, int] = {}
     for (w,) in rows:
         for name in (x.strip() for x in w.split(",") if x.strip()):
             key = name.lower()

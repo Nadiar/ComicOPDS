@@ -31,15 +31,21 @@ class TestAdminEndpoints:
 
         return client
 
+    @staticmethod
+    def _csrf_headers(auth_headers: dict[str, str]) -> dict[str, str]:
+        headers = dict(auth_headers)
+        headers["X-Requested-With"] = "XMLHttpRequest"
+        return headers
+
     def test_reindex_trigger(self, client_with_data, auth_headers):
         """POST /admin/reindex triggers background scan."""
-        response = client_with_data.post("/admin/reindex", headers=auth_headers)
+        response = client_with_data.post("/admin/reindex", headers=self._csrf_headers(auth_headers))
 
         assert response.status_code in [200, 202]
 
     def test_precache_trigger(self, client_with_data, auth_headers):
         """POST /admin/thumbs/precache generates all thumbnails."""
-        response = client_with_data.post("/admin/thumbs/precache", headers=auth_headers)
+        response = client_with_data.post("/admin/thumbs/precache", headers=self._csrf_headers(auth_headers))
 
         assert response.status_code in [200, 202]
 
@@ -56,28 +62,13 @@ class TestAdminEndpoints:
             # If not JSON, just verify it's a string response
             assert isinstance(response.text, str)
 
-    def test_health_check_includes_build_info(self, client_with_data, monkeypatch):
-        """GET /healthz includes commit and route diagnostics."""
-        from app import main as main_mod
-
-        monkeypatch.setattr(
-            main_mod,
-            "_build_info",
-            lambda: {
-                "commit": "abc123def456",
-                "server_base": "https://example.test",
-                "url_prefix": "",
-                "opds2_manifest_path": "/opds/v2/manifest",
-            },
-        )
-
+    def test_health_check_minimal_payload(self, client_with_data):
+        """GET /healthz returns only minimal status payload."""
         response = client_with_data.get("/healthz")
 
         assert response.status_code == 200
         data = response.json()
-        assert data["ok"] is True
-        assert data["commit"] == "abc123def456"
-        assert data["opds2_manifest_path"] == "/opds/v2/manifest"
+        assert data == {"ok": True}
 
     def test_debug_build_returns_build_info(self, client_with_data, auth_headers, monkeypatch):
         """GET /debug/build exposes commit and route diagnostics."""

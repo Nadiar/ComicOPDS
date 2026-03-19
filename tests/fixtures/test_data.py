@@ -55,9 +55,6 @@ def index_test_data(conn: sqlite3.Connection, library_dir: Path):
     test_dirs = create_test_directory_structure(library_dir)
     test_files = create_test_cbz_files(test_dirs)
 
-    # Insert into database
-    db.begin_scan(conn)
-
     # Insert directory entries first (using forward slashes for consistency)
     series_rel = str(test_dirs["series"].relative_to(library_dir)).replace("\\", "/")
     db.upsert_dir(

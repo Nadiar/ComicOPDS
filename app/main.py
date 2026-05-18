@@ -25,7 +25,7 @@ from .routes_admin import router as admin_router
 from .routes_opds import router as opds_router
 from .scanning import (
     INDEX_STATUS, THUMB_STATUS,
-    set_status, start_scan, run_scan, run_precache_thumbs,
+    set_status, start_scan, run_scan, run_precache_thumbs, start_watcher,
 )
 
 # -------------------- Logging --------------------
@@ -117,7 +117,14 @@ def _build_info() -> dict[str, Any]:
     }
 
 def _health_payload() -> dict[str, Any]:
-    return {"ok": True}
+    try:
+        conn = db.connect()
+        conn.execute("SELECT 1").fetchone()
+        conn.close()
+        db_ok = True
+    except Exception:
+        db_ok = False
+    return {"ok": db_ok, "db": db_ok}
 
 @app.on_event("startup")
 def startup():
@@ -153,6 +160,9 @@ def startup():
     app_logger.info(f"  Watch enabled: {ENABLE_WATCH}")
     app_logger.info(f"  Log level: {LOG_LEVEL}")
     app_logger.info("===============================")
+
+    if ENABLE_WATCH:
+        start_watcher()
 
     # Always start the page cache cleaner first so it runs regardless of scan mode
     if PAGE_CACHE_AUTOCLEAN:

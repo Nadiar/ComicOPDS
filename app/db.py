@@ -92,6 +92,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_isdir    ON items(is_dir)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_items_ext      ON items(ext)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_series    ON meta(series)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_title     ON meta(title)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_meta_year      ON meta(year)")
@@ -305,6 +306,32 @@ def feed_kind(conn: sqlite3.Connection, path: str) -> str:
     if file_count > 0 and dir_count == 0:
         return "acquisition"
     return "navigation"
+
+def feed_kind_batch(conn: sqlite3.Connection, paths: list[str]) -> dict[str, str]:
+    """Return feed kind for each path in one query. Paths must be directory rel paths."""
+    if not paths:
+        return {}
+    placeholders = ",".join("?" * len(paths))
+    rows = conn.execute(
+        f"""
+        SELECT
+          parent,
+          SUM(CASE WHEN is_dir=1 THEN 1 ELSE 0 END) AS dir_count,
+          SUM(CASE WHEN is_dir=0 THEN 1 ELSE 0 END) AS file_count
+        FROM items
+        WHERE parent IN ({placeholders})
+        GROUP BY parent
+        """,
+        paths,
+    ).fetchall()
+    result = {p: "navigation" for p in paths}
+    for row in rows:
+        file_count = int(row["file_count"] or 0)
+        dir_count = int(row["dir_count"] or 0)
+        if file_count > 0 and dir_count == 0:
+            result[row["parent"]] = "acquisition"
+    return result
+
 
 def get_item(conn: sqlite3.Connection, rel: str):
     return conn.execute("""

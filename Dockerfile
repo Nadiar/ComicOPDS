@@ -31,6 +31,9 @@ ENV CONTENT_BASE_DIR=/library \
 EXPOSE 8080
 VOLUME ["/data", "/library"]
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+  CMD wget -qO- http://localhost:8080/healthz | grep -q '"ok": true' || exit 1
+
 ENTRYPOINT ["/app/entrypoint.sh"]
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--no-access-log", "--proxy-headers", "--forwarded-allow-ips", "*"]

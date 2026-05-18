@@ -9,6 +9,8 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Header, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+import email.utils
+
 from . import db
 from .auth import require_basic
 from .config import LIBRARY_DIR, PAGE_SIZE
@@ -39,10 +41,27 @@ def _abspath(rel: str) -> Path:
 
 def _common_file_headers(p: Path) -> dict:
     safe_name = quote(p.name)
+    stat = p.stat()
+    etag = f'"{stat.st_size:x}-{int(stat.st_mtime):x}"'
+    last_mod = email.utils.formatdate(stat.st_mtime, usegmt=True)
     return {
         "Accept-Ranges": "bytes",
         "Content-Type": mime_for(p),
         "Content-Disposition": f"inline; filename*=UTF-8''{safe_name}",
+        "ETag": etag,
+        "Last-Modified": last_mod,
+        "Cache-Control": "private, max-age=86400",
+    }
+
+
+def _thumb_file_headers(p: Path) -> dict:
+    stat = p.stat()
+    etag = f'"{stat.st_size:x}-{int(stat.st_mtime):x}"'
+    last_mod = email.utils.formatdate(stat.st_mtime, usegmt=True)
+    return {
+        "ETag": etag,
+        "Last-Modified": last_mod,
+        "Cache-Control": "private, max-age=86400",
     }
 
 
@@ -74,10 +93,9 @@ def browse(request: Request, path: str = Query("", description="Relative folder 
         rows = db.children_page(conn, path, PAGE_SIZE, start)
         last_mod = db.last_modified(conn)
         feed_kind = db.feed_kind(conn, path)
-        dir_link_types = {
-            r["rel"]: opds_media_type(db.feed_kind(conn, r["rel"]))
-            for r in rows if int(r["is_dir"]) == 1
-        }
+        dir_paths = [r["rel"] for r in rows if int(r["is_dir"]) == 1]
+        dir_kinds = db.feed_kind_batch(conn, dir_paths)
+        dir_link_types = {p: opds_media_type(kind) for p, kind in dir_kinds.items()}
     finally:
         conn.close()
 
@@ -335,7 +353,7 @@ def thumb(path: str, _=Depends(require_basic)):
     p = have_thumb(path, cvid) or generate_thumb(path, abs_p, cvid)
     if not p or not p.exists():
         raise HTTPException(404, "No thumbnail")
-    return FileResponse(p, media_type="image/jpeg")
+    return FileResponse(p, media_type="image/jpeg", headers=_thumb_file_headers(p))
 
 # -------------------- DiViNa manifest (OPDS 2.0) --------------------
 
@@ -506,7 +524,7 @@ def book_thumb(item_id: int, _=Depends(require_basic)):
     tp = have_thumb(row["rel"], cvid) or generate_thumb(row["rel"], p, cvid)
     if not tp or not tp.exists():
         raise HTTPException(404, "No thumbnail")
-    return FileResponse(tp, media_type="image/jpeg")
+    return FileResponse(tp, media_type="image/jpeg", headers=_thumb_file_headers(tp))
 
 
 @router.get("/book/{item_id}/page/{page_num}")

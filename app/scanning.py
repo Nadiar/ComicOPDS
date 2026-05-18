@@ -382,6 +382,92 @@ def refresh_directory(dir_rel: str) -> bool:
     return changed
 
 
+# -------------------- Filesystem watcher --------------------
+
+def _reindex_file(abs_path: Path):
+    """Re-read metadata for a single CBZ and update the DB. Called from watcher thread."""
+    rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
+    conn = db.connect()
+    try:
+        index_single_file(conn, abs_path)
+        conn.commit()
+        logger.info("watcher: updated metadata for %s", rel)
+    except Exception:
+        logger.warning("watcher: failed to index %s", rel, exc_info=True)
+    finally:
+        conn.close()
+
+
+def _delete_file(abs_path: Path):
+    """Remove a deleted CBZ from the DB. Called from watcher thread."""
+    rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
+    conn = db.connect()
+    try:
+        conn.execute("DELETE FROM items WHERE rel=?", (rel,))
+        conn.execute("DELETE FROM meta WHERE rel=?", (rel,))
+        conn.commit()
+        logger.info("watcher: removed %s from index", rel)
+    except Exception:
+        logger.warning("watcher: failed to remove %s", rel, exc_info=True)
+    finally:
+        conn.close()
+
+
+def start_watcher():
+    """Start a watchdog observer monitoring LIBRARY_DIR for CBZ changes."""
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+    except ImportError:
+        logger.warning("watchdog not installed — filesystem watch disabled")
+        return
+
+    # Debounce: delay re-index by this many seconds after the last event for a path,
+    # so we don't read a partially-written file.
+    _DEBOUNCE_S = 2.0
+    _pending: dict[str, threading.Timer] = {}
+    _pending_lock = threading.Lock()
+
+    def _schedule(abs_path: Path, action):
+        key = str(abs_path)
+        with _pending_lock:
+            existing = _pending.pop(key, None)
+            if existing:
+                existing.cancel()
+            t = threading.Timer(_DEBOUNCE_S, action, args=(abs_path,))
+            _pending[key] = t
+            t.daemon = True
+            t.start()
+
+    class _Handler(FileSystemEventHandler):
+        def on_created(self, event):
+            if not event.is_directory and event.src_path.lower().endswith(".cbz"):
+                _schedule(Path(event.src_path), _reindex_file)
+
+        def on_modified(self, event):
+            if not event.is_directory and event.src_path.lower().endswith(".cbz"):
+                _schedule(Path(event.src_path), _reindex_file)
+
+        def on_deleted(self, event):
+            if not event.is_directory and event.src_path.lower().endswith(".cbz"):
+                _schedule(Path(event.src_path), _delete_file)
+
+        def on_moved(self, event):
+            if not event.is_directory:
+                src = Path(event.src_path)
+                dst = Path(event.dest_path)
+                if src.suffix.lower() == ".cbz":
+                    _schedule(src, _delete_file)
+                if dst.suffix.lower() == ".cbz":
+                    _schedule(dst, _reindex_file)
+
+    observer = Observer()
+    observer.schedule(_Handler(), str(LIBRARY_DIR), recursive=True)
+    observer.daemon = True
+    observer.start()
+    logger.info("watcher: monitoring %s for CBZ changes", LIBRARY_DIR)
+
+
 def index_single_file(conn, abs_path: Path) -> int:
     """Index a single CBZ file into the database. Returns 1 on success, 0 on error."""
     rel = abs_path.relative_to(LIBRARY_DIR).as_posix()

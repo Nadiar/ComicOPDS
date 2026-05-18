@@ -5,3 +5,4 @@ pillow>=10.4.0
 bcrypt>=4.1.2
 passlib>=1.7.4
 defusedxml>=0.7.1
+watchdog>=4.0.0

@@ -32,7 +32,7 @@ EXPOSE 8080
 VOLUME ["/data", "/library"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-  CMD wget -qO- http://localhost:8080/healthz | grep -q '"ok": true' || exit 1
+  CMD wget -qO- http://localhost:8080/healthz | grep -q '"ok":true' || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 

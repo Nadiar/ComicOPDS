@@ -461,11 +461,26 @@ def start_watcher():
                 if dst.suffix.lower() == ".cbz":
                     _schedule(dst, _reindex_file)
 
-    observer = Observer()
-    observer.schedule(_Handler(), str(LIBRARY_DIR), recursive=True)
-    observer.daemon = True
-    observer.start()
-    logger.info("watcher: monitoring %s for CBZ changes", LIBRARY_DIR)
+    # Try native observer first (inotify on Linux, FSEvents on macOS,
+    # ReadDirectoryChanges on Windows). Network mounts (NFS/CIFS/SMB) don't
+    # support inotify — fall back to PollingObserver in that case.
+    try:
+        observer = Observer()
+        observer.schedule(_Handler(), str(LIBRARY_DIR), recursive=True)
+        observer.daemon = True
+        observer.start()
+        logger.info("watcher: monitoring %s for CBZ changes (native)", LIBRARY_DIR)
+    except Exception as e:
+        logger.warning("watcher: native observer failed (%s), falling back to polling", e)
+        try:
+            from watchdog.observers.polling import PollingObserver
+            observer = PollingObserver(timeout=30)
+            observer.schedule(_Handler(), str(LIBRARY_DIR), recursive=True)
+            observer.daemon = True
+            observer.start()
+            logger.info("watcher: monitoring %s for CBZ changes (polling)", LIBRARY_DIR)
+        except Exception as e2:
+            logger.warning("watcher: could not start filesystem watch: %s", e2)
 
 
 def index_single_file(conn, abs_path: Path) -> int:

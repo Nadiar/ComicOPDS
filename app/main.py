@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 from functools import lru_cache
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from .config import (
     LIBRARY_DIR, PAGE_SIZE, SERVER_BASE, URL_PREFIX,
     PRECACHE_THUMBS, THUMB_WORKERS, PRECACHE_ON_START, AUTO_INDEX_ON_START, ENABLE_WATCH,
     PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES, PAGE_CACHE_AUTOCLEAN, PAGE_CACHE_CLEAN_INTERVAL_MIN,
+    DB_MAINTENANCE_INTERVAL_MIN, LOG_AUTH,
 )
 from .feeds import abs_url
 from .page_cache import autoclean_loop
@@ -37,6 +39,18 @@ _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(m
 app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
+
+try:
+    _log_file = Path("/data/app.log")
+    _log_file.parent.mkdir(parents=True, exist_ok=True)
+    _file_handler = RotatingFileHandler(
+        str(_log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+    )
+    _file_handler.setLevel(logging.INFO if LOG_AUTH else logging.WARNING)
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    app_logger.addHandler(_file_handler)
+except OSError:
+    pass  # /data not available (dev environment)
 
 
 def _mask_headers(h: dict) -> dict:
@@ -159,6 +173,8 @@ def startup():
     app_logger.info(f"  Thumb workers: {THUMB_WORKERS}")
     app_logger.info(f"  Watch enabled: {ENABLE_WATCH}")
     app_logger.info(f"  Log level: {LOG_LEVEL}")
+    app_logger.info(f"  Auth logging (LOG_AUTH): {LOG_AUTH}")
+    app_logger.info(f"  Log file: /data/app.log ({'INFO+' if LOG_AUTH else 'WARNING+'})")
     app_logger.info("===============================")
 
     if ENABLE_WATCH:
@@ -170,6 +186,10 @@ def startup():
         t.start()
         app_logger.info(f"Page cache auto-clean enabled: every {PAGE_CACHE_CLEAN_INTERVAL_MIN} min, "
                         f"ttl={PAGE_CACHE_TTL_DAYS}d, cap={PAGE_CACHE_MAX_BYTES} bytes")
+
+    t = threading.Thread(target=db.maintenance_loop, args=(DB_MAINTENANCE_INTERVAL_MIN,), daemon=True)
+    t.start()
+    app_logger.info(f"DB maintenance enabled: every {DB_MAINTENANCE_INTERVAL_MIN} min")
 
     if AUTO_INDEX_ON_START:
         start_scan(force=True)

@@ -569,6 +569,7 @@ def book_manifest(item_id: int, user: str = Depends(require_basic)):
 @router.get("/opds12/smart", response_class=Response)
 @router.get("/opds20/smart", response_class=Response)
 def opds_smart_lists(request: Request, _=Depends(require_basic)):
+    refresh_directory("")
     lists = sorted(_load_smartlists(), key=lambda x: (x.get("name") or "").lower())
     conn = db.connect()
     try:
@@ -637,6 +638,7 @@ def _vol_label(series: str, volume: str) -> str:
 @router.get("/opds12/smart/{slug}", response_class=Response)
 @router.get("/opds20/smart/{slug}", response_class=Response)
 def opds_smart_list(request: Request, slug: str, page: int = 1, _=Depends(require_basic)):
+    refresh_directory("")
     lists = _load_smartlists()
     sl = next((x for x in lists if x.get("slug") == slug), None)
     if not sl:
@@ -770,6 +772,7 @@ def opds_smart_list_volume(
     page: int = 1,
     _=Depends(require_basic),
 ):
+    refresh_directory("")
     lists = _load_smartlists()
     sl = next((x for x in lists if x.get("slug") == slug), None)
     if not sl:

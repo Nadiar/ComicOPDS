@@ -10,6 +10,7 @@ from typing import Any
 DB_PATH = Path("/data/library.db")
 
 HAS_FTS5: bool = False
+_SCHEMA_INITIALIZED: bool = False
 _VALID_TABLES = frozenset({"items", "meta", "fts", "users"})
 
 logger = logging.getLogger("comicopds")
@@ -18,6 +19,7 @@ def has_fts5() -> bool:
     return HAS_FTS5
 
 def connect() -> sqlite3.Connection:
+    global _SCHEMA_INITIALIZED
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try: conn.execute("PRAGMA journal_mode=WAL;")
@@ -26,9 +28,11 @@ def connect() -> sqlite3.Connection:
     except Exception: pass
     try: conn.execute("PRAGMA temp_store=MEMORY;")
     except Exception: pass
-    try: conn.execute("PRAGMA cache_size=-200000;")
+    try: conn.execute("PRAGMA cache_size=-8000;")
     except Exception: pass
-    _ensure_schema(conn)
+    if not _SCHEMA_INITIALIZED:
+        _ensure_schema(conn)
+        _SCHEMA_INITIALIZED = True
     return conn
 
 def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
@@ -754,6 +758,39 @@ def smartlist_count_for_volume(
            AND COALESCE(m.volume, '') = ?
     """, (*params, *fts_params, series, volume)).fetchone()
     return int(row[0]) if row else 0
+
+# ----------------------------- Maintenance ------------------------------------
+
+def run_maintenance() -> dict:
+    """Run VACUUM and FTS5 optimize. Returns a dict with results."""
+    conn = connect()
+    results: dict = {"vacuum": False, "fts_optimize": False, "error": None}
+    try:
+        if HAS_FTS5:
+            conn.execute("INSERT INTO fts(fts) VALUES('optimize')")
+            conn.commit()
+            results["fts_optimize"] = True
+        conn.execute("VACUUM")
+        results["vacuum"] = True
+    except Exception as e:
+        results["error"] = str(e)
+        logger.error("db maintenance error: %s", e)
+    finally:
+        conn.close()
+    return results
+
+
+def maintenance_loop(interval_min: int) -> None:
+    """Background thread: run DB maintenance on a fixed interval."""
+    import time
+    interval = max(1, interval_min) * 60
+    time.sleep(interval)  # delay first run so startup scan can finish
+    while True:
+        logger.info("db maintenance: starting VACUUM + FTS optimize")
+        result = run_maintenance()
+        logger.info("db maintenance: done %s", result)
+        time.sleep(interval)
+
 
 # ----------------------------- Stats ------------------------------------------
 

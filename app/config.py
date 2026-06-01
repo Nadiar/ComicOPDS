@@ -38,3 +38,8 @@ PAGE_CACHE_TTL_DAYS = int(os.environ.get("PAGE_CACHE_TTL_DAYS", "14"))
 PAGE_CACHE_MAX_BYTES = int(os.environ.get("PAGE_CACHE_MAX_BYTES", str(10*1024*1024*1024)))
 PAGE_CACHE_AUTOCLEAN = _parse_bool("PAGE_CACHE_AUTOCLEAN", True)
 PAGE_CACHE_CLEAN_INTERVAL_MIN = int(os.environ.get("PAGE_CACHE_CLEAN_INTERVAL_MIN", "360"))
+
+# SQLite maintenance (VACUUM + FTS optimize)
+DB_MAINTENANCE_INTERVAL_MIN = int(os.environ.get("DB_MAINTENANCE_INTERVAL_MIN", "1440"))
+
+LOG_AUTH = _parse_bool("LOG_AUTH", False)

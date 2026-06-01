@@ -34,6 +34,7 @@ logger = logging.getLogger("comicopds")
 router = APIRouter()
 
 ERROR_LOG_PATH = Path("/data/thumbs_errors.log")
+LOG_PATH = Path("/data/app.log")
 
 # -------------------- Pydantic models --------------------
 
@@ -277,6 +278,57 @@ def admin_pages_cleanup(
     logger.info("admin: page cache cleanup triggered by=%s", admin)
     res = clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
     return JSONResponse({"ok": True, **res})
+
+# -------------------- Application logs --------------------
+
+@router.get("/logs", response_class=HTMLResponse)
+def logs_page(request: Request, user: str = Depends(auth.require_admin)):
+    tpl = env.get_template("logs.html")
+    return HTMLResponse(tpl.render())
+
+@router.get("/admin/logs", response_class=JSONResponse)
+def get_logs(
+    lines: int = Query(500, ge=1, le=2000),
+    admin: str = Depends(auth.require_admin),
+):
+    if not LOG_PATH.exists():
+        return JSONResponse({"lines": [], "total_lines": 0, "file_size": 0})
+    try:
+        text = LOG_PATH.read_text(encoding="utf-8", errors="replace")
+        all_lines = text.splitlines()
+        total = len(all_lines)
+        file_size = LOG_PATH.stat().st_size
+        return JSONResponse({
+            "lines": all_lines[-lines:],
+            "total_lines": total,
+            "file_size": file_size,
+        })
+    except OSError as e:
+        raise HTTPException(500, f"Could not read log: {e}")
+
+@router.get("/admin/logs/download")
+def download_logs(admin: str = Depends(auth.require_admin)):
+    if not LOG_PATH.exists():
+        raise HTTPException(404, "Log file not found")
+    return FileResponse(
+        str(LOG_PATH),
+        media_type="text/plain",
+        filename="app.log",
+        headers={"Cache-Control": "no-store"},
+    )
+
+@router.post("/admin/logs/clear", response_class=JSONResponse)
+def clear_logs(
+    _: None = Depends(auth.require_csrf_header),
+    admin: str = Depends(auth.require_admin),
+):
+    logger.info("admin: log file cleared by=%s", admin)
+    try:
+        if LOG_PATH.exists():
+            LOG_PATH.write_text("", encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"Could not clear log: {e}")
+    return JSONResponse({"ok": True})
 
 # -------------------- Smart Lists (CRUD) --------------------
 

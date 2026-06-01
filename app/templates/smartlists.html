@@ -5,8 +5,14 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>ComicOPDS — Smart Lists</title>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%230d6efd' viewBox='0 0 16 16'%3E%3Cpath d='M8.5 2.687c.654-.689 1.782-.886 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492zM8 1.783C7.015.936 5.587.81 4.287.94c-1.514.153-3.042.672-3.994 1.105A.5.5 0 0 0 0 2.5v11a.5.5 0 0 0 .707.455c.882-.4 2.303-.881 3.68-1.02 1.409-.142 2.59.087 3.223.877a.5.5 0 0 0 .78 0c.633-.79 1.814-1.019 3.222-.877 1.378.139 2.8.62 3.681 1.02A.5.5 0 0 0 16 13.5v-11a.5.5 0 0 0-.293-.455c-.952-.433-2.48-.952-3.994-1.105C10.413.809 8.985.936 8 1.783'/%3E%3C/svg%3E">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css"
+        rel="stylesheet"
+        integrity="sha384-XGjxtQfXaH2tnPFa9x+ruJTuLE3Aa6LhHSWRr1XeTyhezb4abCG4ccI5AkVDxqC+"
+        crossorigin="anonymous">
   <style>
     .group-card { border-left: 4px solid var(--bs-primary); }
     .rule-row .form-select, .rule-row .form-control { min-width: 10rem; }
@@ -19,7 +25,9 @@
       <a class="navbar-brand fw-semibold" href="/dashboard"><i class="bi bi-book-half me-2"></i>ComicOPDS</a>
       <div class="ms-auto small text-secondary">
         <a class="text-decoration-none me-3" href="/opds"><i class="bi bi-rss me-1"></i>OPDS</a>
-        <a class="text-decoration-none" href="/dashboard"><i class="bi bi-speedometer2 me-1"></i>Dashboard</a>
+        <a class="text-decoration-none me-3" href="/search"><i class="bi bi-funnel me-1"></i>Smart Lists</a>
+        <a class="text-decoration-none me-3" href="/dashboard"><i class="bi bi-speedometer2 me-1"></i>Dashboard</a>
+        <a class="text-decoration-none" href="/logs"><i class="bi bi-journal-text me-1"></i>Logs</a>
       </div>
     </div>
   </nav>

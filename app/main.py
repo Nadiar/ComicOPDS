@@ -40,14 +40,26 @@ app_logger.handlers.clear()
 app_logger.addHandler(_handler)
 app_logger.propagate = False
 
+class _RequestFilter(logging.Filter):
+    """Always pass WARNING+. Pass INFO only if it isn't an HTTP request line,
+    or if LOG_AUTH is enabled (in which case all INFO is allowed through)."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.levelno >= logging.WARNING:
+            return True
+        if LOG_AUTH:
+            return True
+        msg = record.getMessage()
+        return not (msg.startswith("-->") or msg.startswith("<--"))
+
 try:
     _log_file = Path("/data/app.log")
     _log_file.parent.mkdir(parents=True, exist_ok=True)
     _file_handler = RotatingFileHandler(
         str(_log_file), maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
     )
-    _file_handler.setLevel(logging.INFO if LOG_AUTH else logging.WARNING)
+    _file_handler.setLevel(logging.INFO)
     _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _file_handler.addFilter(_RequestFilter())
     app_logger.addHandler(_file_handler)
 except OSError:
     pass  # /data not available (dev environment)
@@ -174,7 +186,7 @@ def startup():
     app_logger.info(f"  Watch enabled: {ENABLE_WATCH}")
     app_logger.info(f"  Log level: {LOG_LEVEL}")
     app_logger.info(f"  Auth logging (LOG_AUTH): {LOG_AUTH}")
-    app_logger.info(f"  Log file: /data/app.log ({'INFO+' if LOG_AUTH else 'WARNING+'})")
+    app_logger.info(f"  Log file: /data/app.log (operational INFO+; request logs {'enabled' if LOG_AUTH else 'suppressed — set LOG_AUTH=true to enable'})")
     app_logger.info("===============================")
 
     if ENABLE_WATCH:

@@ -6,6 +6,8 @@ import os
 import secrets
 import threading
 import time
+from datetime import datetime, timedelta
+from urllib.parse import quote as _url_quote
 
 import bcrypt
 from fastapi import Depends, HTTPException, Request, status
@@ -62,6 +64,43 @@ def _clear_failures(ip: str) -> None:
     with _FAIL_COUNTS_LOCK:
         _FAIL_COUNTS.pop(ip, None)
 
+
+# -------------------- Session store --------------------
+
+_SESSION_TTL = timedelta(hours=8)
+_SESSION_STORE: dict[str, dict] = {}
+_SESSION_LOCK = threading.Lock()
+
+
+def create_session(username: str, is_admin: bool) -> str:
+    token = secrets.token_urlsafe(32)
+    with _SESSION_LOCK:
+        _SESSION_STORE[token] = {
+            "username": username,
+            "is_admin": is_admin,
+            "expires": datetime.utcnow() + _SESSION_TTL,
+        }
+    return token
+
+
+def validate_session(token: str) -> dict | None:
+    with _SESSION_LOCK:
+        session = _SESSION_STORE.get(token)
+        if not session:
+            return None
+        if datetime.utcnow() > session["expires"]:
+            del _SESSION_STORE[token]
+            return None
+        session["expires"] = datetime.utcnow() + _SESSION_TTL
+        return dict(session)
+
+
+def invalidate_session(token: str) -> None:
+    with _SESSION_LOCK:
+        _SESSION_STORE.pop(token, None)
+
+
+# -------------------- CSRF header check --------------------
 
 def require_csrf_header(request: Request) -> None:
     if request.headers.get("X-Requested-With") != "XMLHttpRequest":
@@ -165,3 +204,64 @@ def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(
         )
     log.info("admin access accepted: user=%s ip=%s", user["username"], get_real_client_ip(request))
     return user["username"]
+
+
+# -------------------- Session-aware dashboard dependencies --------------------
+
+optional_basic = HTTPBasic(auto_error=False)
+
+
+def _unauthed_response(request: Request) -> None:
+    """Raise 302 for browser page requests, 401 JSON for API/XHR calls."""
+    if (request.headers.get("X-Requested-With") == "XMLHttpRequest"
+            or "application/json" in request.headers.get("Accept", "")):
+        raise HTTPException(status_code=401, detail="Authentication required")
+    next_path = _url_quote(
+        request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    )
+    raise HTTPException(status_code=302, headers={"Location": f"/login?next={next_path}"})
+
+
+def require_session_or_basic(
+    request: Request,
+    credentials: HTTPBasicCredentials | None = Depends(optional_basic),
+) -> str:
+    """Dashboard auth: accepts session cookie OR Basic Auth. Any authenticated user."""
+    if DISABLE_AUTH:
+        return "anonymous"
+    token = request.cookies.get("session")
+    if token:
+        session = validate_session(token)
+        if session:
+            return session["username"]
+    if credentials:
+        user = _authenticate(request, credentials)
+        return user["username"]
+    _unauthed_response(request)
+
+
+def require_session_or_admin(
+    request: Request,
+    credentials: HTTPBasicCredentials | None = Depends(optional_basic),
+) -> str:
+    """Dashboard auth: accepts session cookie OR Basic Auth. Admin users only."""
+    if DISABLE_AUTH:
+        return "anonymous"
+    token = request.cookies.get("session")
+    if token:
+        session = validate_session(token)
+        if session:
+            if not session["is_admin"]:
+                raise HTTPException(status_code=403, detail="Admin access required")
+            return session["username"]
+    if credentials:
+        user = _authenticate(request, credentials)
+        if not user["is_admin"]:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect username, password, or insufficient permissions",
+                headers={"WWW-Authenticate": "Basic"},
+            )
+        log.info("admin access accepted (basic): user=%s ip=%s", user["username"], get_real_client_ip(request))
+        return user["username"]
+    _unauthed_response(request)

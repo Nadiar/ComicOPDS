@@ -11,14 +11,15 @@ from pathlib import Path
 from urllib.parse import quote
 
 import bcrypt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+import secrets
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import (
-    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
+    FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse,
 )
 from pydantic import BaseModel, Field
 
 from . import auth, db
-from .auth import require_basic
+from .auth import require_session_or_basic, require_session_or_admin
 from .config import (
     LIBRARY_DIR, PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES, THUMB_WORKERS,
 )
@@ -47,15 +48,100 @@ class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=8, max_length=72)
     is_admin: bool | None = None
 
+# -------------------- Login / Logout --------------------
+
+_LOGIN_CSRF_COOKIE = "csrf_login"
+
+
+def _safe_next(url: str | None) -> str:
+    """Only allow relative redirect targets — prevent open redirect.
+    Rejects protocol-relative (//), backslash variants (/\\ or \\), and anything
+    not starting with a single slash.
+    """
+    if not url:
+        return "/dashboard"
+    if not url.startswith("/") or url.startswith("//") or "\\" in url:
+        return "/dashboard"
+    return url
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: str = "", error: str = ""):
+    # Already logged in via session → go straight to dashboard
+    token = request.cookies.get("session")
+    if token and auth.validate_session(token):
+        return RedirectResponse(_safe_next(next) or "/dashboard", status_code=302)
+    csrf_token = secrets.token_urlsafe(32)
+    tpl = env.get_template("login.html")
+    html = tpl.render(next=next, error=error, csrf_token=csrf_token)
+    response = HTMLResponse(html)
+    response.set_cookie(
+        _LOGIN_CSRF_COOKIE, csrf_token,
+        httponly=True, samesite="strict", max_age=1800,
+    )
+    return response
+
+
+@router.post("/login")
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form(default=""),
+    csrf_token: str = Form(...),
+):
+    # CSRF: verify form token matches cookie
+    cookie_csrf = request.cookies.get(_LOGIN_CSRF_COOKIE, "")
+    if not cookie_csrf or not secrets.compare_digest(csrf_token, cookie_csrf):
+        return RedirectResponse("/login?error=invalid_request", status_code=303)
+
+    # Authenticate via existing rate-limited helper
+    from fastapi.security import HTTPBasicCredentials
+    creds = HTTPBasicCredentials(username=username, password=password)
+    try:
+        user = auth._authenticate(request, creds)
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            next_enc = next.replace("&", "%26")
+            return RedirectResponse(f"/login?next={next_enc}&error=rate_limited", status_code=303)
+        next_enc = next.replace("&", "%26")
+        return RedirectResponse(f"/login?next={next_enc}&error=invalid_credentials", status_code=303)
+
+    if not user["is_admin"]:
+        next_enc = next.replace("&", "%26")
+        return RedirectResponse(f"/login?next={next_enc}&error=invalid_credentials", status_code=303)
+
+    token = auth.create_session(user["username"], bool(user["is_admin"]))
+    target = _safe_next(next) or "/dashboard"
+    response = RedirectResponse(target, status_code=303)
+    response.set_cookie(
+        "session", token,
+        httponly=True, samesite="lax", max_age=8 * 3600,
+    )
+    response.delete_cookie(_LOGIN_CSRF_COOKIE)
+    logger.info("login: session created for user=%s", user["username"])
+    return response
+
+
+@router.get("/logout")
+def logout(request: Request):
+    token = request.cookies.get("session")
+    if token:
+        auth.invalidate_session(token)
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie("session")
+    return response
+
+
 # -------------------- Dashboard --------------------
 
 @router.get("/dashboard", response_class=HTMLResponse)
-def dashboard_page(request: Request, user: str = Depends(auth.require_admin)):
+def dashboard_page(request: Request, user: str = Depends(require_session_or_admin)):
     tpl = env.get_template("dashboard.html")
-    return HTMLResponse(tpl.render())
+    return HTMLResponse(tpl.render(user=user))
 
 @router.get("/stats.json", response_class=JSONResponse)
-def stats(_=Depends(require_basic)):
+def stats(_=Depends(require_session_or_basic)):
     conn = db.connect()
     try:
         return db.stats(conn)
@@ -65,7 +151,7 @@ def stats(_=Depends(require_basic)):
 # -------------------- User Administration --------------------
 
 @router.get("/api/users")
-def list_users(admin: str = Depends(auth.require_admin)):
+def list_users(admin: str = Depends(require_session_or_admin)):
     logger.info("admin: list users by=%s", admin)
     conn = db.connect()
     try:
@@ -78,7 +164,7 @@ def list_users(admin: str = Depends(auth.require_admin)):
 def create_user(
     user: UserCreate,
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: user created username=%s by=%s", user.username, admin)
     conn = db.connect()
@@ -100,7 +186,7 @@ def update_user(
     user_id: int,
     user: UserUpdate,
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: user updated id=%d by=%s", user_id, admin)
     conn = db.connect()
@@ -130,7 +216,7 @@ def update_user(
 def delete_user(
     user_id: int,
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: user deleted id=%d by=%s", user_id, admin)
     conn = db.connect()
@@ -146,7 +232,7 @@ def delete_user(
 # -------------------- Index status & Reindex --------------------
 
 @router.get("/index/status", response_class=JSONResponse)
-def index_status(_=Depends(require_basic)):
+def index_status(_=Depends(require_session_or_basic)):
     conn = db.connect()
     try:
         usable = conn.execute("SELECT EXISTS(SELECT 1 FROM items LIMIT 1)").fetchone()[0] == 1
@@ -158,7 +244,7 @@ def index_status(_=Depends(require_basic)):
 def admin_reindex(
     force: bool = Query(False),
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: reindex triggered by=%s force=%s", admin, force)
     if INDEX_STATUS["running"]:
@@ -169,7 +255,7 @@ def admin_reindex(
 @router.post("/admin/reindex/path", response_class=JSONResponse)
 def admin_reindex_path(path: str = Query(..., description="Relative path to a file or folder inside the library"),
                        _: None = Depends(auth.require_csrf_header),
-                       admin: str = Depends(auth.require_admin)):
+                       admin: str = Depends(require_session_or_admin)):
     """Index or re-index a specific file or folder by relative path."""
     logger.info("admin: path reindex triggered by=%s path=%s", admin, path)
     abs_path = (LIBRARY_DIR / path).resolve()
@@ -210,7 +296,7 @@ def admin_reindex_path(path: str = Query(..., description="Relative path to a fi
 @router.post("/admin/thumbs/precache", response_class=JSONResponse)
 def admin_thumbs_precache(
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: thumbnail precache triggered by=%s", admin)
     if THUMB_STATUS["running"]:
@@ -220,11 +306,11 @@ def admin_thumbs_precache(
     return JSONResponse({"ok": True, "started": True})
 
 @router.get("/thumbs/status", response_class=JSONResponse)
-def thumbs_status(_=Depends(require_basic)):
+def thumbs_status(_=Depends(require_session_or_basic)):
     return JSONResponse(THUMB_STATUS)
 
 @router.get("/thumbs/errors/count", response_class=JSONResponse)
-def thumbs_errors_count(_=Depends(require_basic)):
+def thumbs_errors_count(_=Depends(require_session_or_basic)):
     n = 0
     size = 0
     mtime = 0.0
@@ -240,7 +326,7 @@ def thumbs_errors_count(_=Depends(require_basic)):
     return {"lines": n, "size_bytes": size, "modified": mtime}
 
 @router.get("/thumbs/errors/log")
-def thumbs_errors_log(_=Depends(require_basic)):
+def thumbs_errors_log(_=Depends(require_session_or_basic)):
     if not ERROR_LOG_PATH.exists():
         return PlainTextResponse("", media_type="text/plain", headers={
             "Content-Disposition": "attachment; filename=thumbs_errors.log"
@@ -255,7 +341,7 @@ def thumbs_errors_log(_=Depends(require_basic)):
 @router.post("/thumbs/errors/clear", response_class=JSONResponse)
 def thumbs_errors_clear(
     _: None = Depends(auth.require_csrf_header),
-    __=Depends(auth.require_admin),
+    __=Depends(require_session_or_admin),
 ):
     try:
         if ERROR_LOG_PATH.exists():
@@ -267,13 +353,13 @@ def thumbs_errors_clear(
 # -------------------- Page cache --------------------
 
 @router.get("/pages/cache/status", response_class=JSONResponse)
-def pages_cache_status_route(_=Depends(require_basic)):
+def pages_cache_status_route(_=Depends(require_session_or_basic)):
     return JSONResponse(page_cache_status())
 
 @router.post("/admin/pages/cleanup", response_class=JSONResponse)
 def admin_pages_cleanup(
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: page cache cleanup triggered by=%s", admin)
     res = clean_page_cache(PAGE_CACHE_TTL_DAYS, PAGE_CACHE_MAX_BYTES)
@@ -282,14 +368,14 @@ def admin_pages_cleanup(
 # -------------------- Application logs --------------------
 
 @router.get("/logs", response_class=HTMLResponse)
-def logs_page(request: Request, user: str = Depends(auth.require_admin)):
+def logs_page(request: Request, user: str = Depends(require_session_or_admin)):
     tpl = env.get_template("logs.html")
-    return HTMLResponse(tpl.render())
+    return HTMLResponse(tpl.render(user=user))
 
 @router.get("/admin/logs", response_class=JSONResponse)
 def get_logs(
     lines: int = Query(500, ge=1, le=2000),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     if not LOG_PATH.exists():
         return JSONResponse({"lines": [], "total_lines": 0, "file_size": 0})
@@ -308,7 +394,7 @@ def get_logs(
         raise HTTPException(500, "Could not read log file")
 
 @router.get("/admin/logs/download")
-def download_logs(admin: str = Depends(auth.require_admin)):
+def download_logs(admin: str = Depends(require_session_or_admin)):
     if not LOG_PATH.exists():
         raise HTTPException(404, "Log file not found")
     return FileResponse(
@@ -321,7 +407,7 @@ def download_logs(admin: str = Depends(auth.require_admin)):
 @router.post("/admin/logs/clear", response_class=JSONResponse)
 def clear_logs(
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: log file cleared by=%s", admin)
     try:
@@ -366,19 +452,19 @@ def _save_smartlists(lists: list[dict]) -> None:
     )
 
 @router.get("/search", response_class=HTMLResponse)
-def smartlists_page(_=Depends(require_basic)):
+def smartlists_page(user: str = Depends(require_session_or_admin)):
     tpl = env.get_template("smartlists.html")
-    return HTMLResponse(tpl.render())
+    return HTMLResponse(tpl.render(user=user))
 
 @router.get("/smartlists.json", response_class=JSONResponse)
-def smartlists_get(_=Depends(require_basic)):
+def smartlists_get(_=Depends(require_session_or_basic)):
     return JSONResponse(_load_smartlists())
 
 @router.post("/smartlists.json", response_class=JSONResponse)
 async def smartlists_post(
     request: Request,
     _: None = Depends(auth.require_csrf_header),
-    admin: str = Depends(auth.require_admin),
+    admin: str = Depends(require_session_or_admin),
 ):
     logger.info("admin: smart lists updated by=%s", admin)
     raw = await request.body()
@@ -411,7 +497,7 @@ async def smartlists_post(
 # -------------------- Debug --------------------
 
 @router.get("/debug/children", response_class=JSONResponse)
-def debug_children(path: str = "", _=Depends(auth.require_admin)):
+def debug_children(path: str = "", _=Depends(require_session_or_admin)):
     conn = db.connect()
     try:
         rows = db.children_page(conn, path.strip("/"), 1000, 0)
@@ -420,11 +506,11 @@ def debug_children(path: str = "", _=Depends(auth.require_admin)):
     return JSONResponse([{"rel": r["rel"], "is_dir": int(r["is_dir"]), "name": r["name"]} for r in rows])
 
 @router.get("/debug/fts")
-def debug_fts(_=Depends(auth.require_admin)):
+def debug_fts(_=Depends(require_session_or_admin)):
     return {"fts5": db.has_fts5()}
 
 @router.get("/debug/build", response_class=JSONResponse)
-def debug_build(_=Depends(auth.require_admin)):
+def debug_build(_=Depends(require_session_or_admin)):
     from .main import _git_commit
     from .feeds import abs_url
     from .config import SERVER_BASE, URL_PREFIX

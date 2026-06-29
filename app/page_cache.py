@@ -89,12 +89,12 @@ def _book_cache_entries() -> list[tuple[Path, float, int]]:
     return entries
 
 
-def _remove_dir(p: Path) -> int:
-    size = 0
-    try:
-        size = _dir_size(p)
-    except OSError:
-        pass
+def _remove_dir(p: Path, known_size: int | None = None) -> int:
+    if known_size is None:
+        try:
+            known_size = _dir_size(p)
+        except OSError:
+            known_size = 0
     try:
         for root, dirs, files in os.walk(p, topdown=False):
             for fn in files:
@@ -110,7 +110,7 @@ def _remove_dir(p: Path) -> int:
         p.rmdir()
     except OSError:
         pass
-    return size
+    return known_size or 0
 
 
 def clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
@@ -123,9 +123,9 @@ def clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
 
     # 1) TTL eviction
     if ttl_secs > 0:
-        for d, last, _sz in entries:
+        for d, last, sz in entries:
             if (now - last) > ttl_secs:
-                deleted_bytes += _remove_dir(d)
+                deleted_bytes += _remove_dir(d, sz)
                 deleted_dirs += 1
         entries = _book_cache_entries()
 
@@ -137,7 +137,7 @@ def clean_page_cache(ttl_days: int, max_bytes: int) -> dict:
         while total_bytes > max_bytes and i < len(entries):
             d, _last, sz = entries[i]
             total_bytes -= sz
-            deleted_bytes += _remove_dir(d)
+            deleted_bytes += _remove_dir(d, sz)
             deleted_dirs += 1
             i += 1
 

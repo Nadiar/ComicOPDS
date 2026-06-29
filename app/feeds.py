@@ -41,11 +41,10 @@ def xml_response(xml: str, headers: dict | None = None,
 # -------------------- Small helpers --------------------
 
 def rget(row, key: str, default=None):
-    """Safe access for sqlite3.Row (no .get() method)."""
     try:
         val = row[key]
         return default if val in (None, "") else val
-    except Exception:
+    except (IndexError, KeyError):
         return default
 
 
@@ -68,8 +67,6 @@ def opds_base(request: Request) -> str:
 
 
 def prefers_opds2(request: Request) -> bool:
-    if not request:
-        return False
     path = request.url.path
     if path.startswith(f"{URL_PREFIX}/opds20"):
         return True
@@ -210,7 +207,7 @@ def _entry_data_from_row(row) -> dict[str, Any]:
         "pse_template": pse_template,
         "page_count": page_count,
         "mime": mime_for(abs_file),
-        "size_str": f"{row['size']} bytes",
+        "size_str": f"{row['size'] or 0} bytes",
         "comicvine_issue": comicvine_issue,
         "mtime": row["mtime"],
         "series": rget(row, "series"),

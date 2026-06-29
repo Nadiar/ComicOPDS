@@ -41,7 +41,6 @@
           <span id="lastUpdated">—</span> • Covers: <span id="covers">—</span>
           • Errors: <a id="errLink" href="#" class="link-danger text-decoration-none"><span id="errCount">0</span></a>
           <a id="errClear" href="#" class="link-secondary text-decoration-none small" style="display:none" title="Clear error log"><i class="bi bi-x-circle"></i></a>
-          <!-- NEW: live page cache status -->
           • Cache: <span id="cacheStatus" class="badge text-bg-light cache-pill">—</span>
         </span>
         <button id="thumbsBtn" class="btn btn-sm btn-outline-primary">
@@ -61,7 +60,6 @@
             <li><span class="dropdown-item-text text-muted small">Full reindex re-scans every file,<br>ignoring cached metadata.</span></li>
           </ul>
         </div>
-        <!-- NEW: Clean Page Cache -->
         <button id="cleanCacheBtn" class="btn btn-sm btn-outline-danger">
           <i class="bi bi-trash3 me-1"></i> Clean Page Cache
         </button>
@@ -266,9 +264,6 @@
           integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
           crossorigin="anonymous"></script>
   <script>
-    // Embedded template payload
-    const isMasterAdmin = true; // Dashboard only accessible by admins now
-
     const baseOptions = {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: 'bottom', labels:{usePointStyle:true, boxWidth:8} }, tooltip:{mode:'index', intersect:false} },
@@ -341,11 +336,8 @@
     }
 
     async function load(){
-      // Show user management independently of stats
-      if (isMasterAdmin) {
-        document.getElementById("userManagementSection").style.display = "block";
-        loadUsers();
-      }
+      document.getElementById("userManagementSection").style.display = "block";
+      loadUsers();
       await loadStats();
     }
 
@@ -639,7 +631,6 @@
       }
     });
 
-    // NEW: Clean page cache
     async function updateCacheStatus() {
       try{
         const s = await jget("/pages/cache/status");

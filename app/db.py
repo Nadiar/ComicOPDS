@@ -11,7 +11,6 @@ DB_PATH = Path("/data/library.db")
 
 HAS_FTS5: bool = False
 _SCHEMA_INITIALIZED: bool = False
-_VALID_TABLES = frozenset({"items", "meta", "fts", "users"})
 
 logger = logging.getLogger("comicopds")
 
@@ -34,20 +33,6 @@ def connect() -> sqlite3.Connection:
         _ensure_schema(conn)
         _SCHEMA_INITIALIZED = True
     return conn
-
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    if table not in _VALID_TABLES:
-        raise ValueError(f"Invalid table: {table}")
-    row = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(r[1].lower() == column.lower() for r in row)
-
-def _add_column(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
-    if table not in _VALID_TABLES:
-        raise ValueError(f"Invalid table: {table}")
-    try:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
-    except sqlite3.OperationalError:
-        pass
 
 def _ensure_schema(conn: sqlite3.Connection) -> None:
     global HAS_FTS5
@@ -85,13 +70,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
     )
     """)
 
-    # migration: ensure 'format' column exists
-    if not _column_exists(conn, "meta", "format"):
-        _add_column(conn, "meta", "format", "TEXT")
+    # migration: ensure 'format' column exists in meta
+    meta_cols = {r[1].lower() for r in conn.execute("PRAGMA table_info(meta)").fetchall()}
+    if "format" not in meta_cols:
+        try:
+            conn.execute("ALTER TABLE meta ADD COLUMN format TEXT")
+        except sqlite3.OperationalError:
+            pass
 
-    # migration: ensure 'page_count' column exists in items table
-    if not _column_exists(conn, "items", "page_count"):
-        _add_column(conn, "items", "page_count", "INTEGER DEFAULT 0")
+    # migration: ensure 'page_count' column exists in items
+    items_cols = {r[1].lower() for r in conn.execute("PRAGMA table_info(items)").fetchall()}
+    if "page_count" not in items_cols:
+        try:
+            conn.execute("ALTER TABLE items ADD COLUMN page_count INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_parent   ON items(parent)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name     ON items(name)")
@@ -149,7 +142,6 @@ def get_existing_items_mtime(conn: sqlite3.Connection) -> dict[str, tuple[float,
     return {r["rel"]: (float(r["mtime"] or 0), int(r["size"] or 0), int(r["page_count"] or 0)) for r in rows}
 
 def cleanup_deleted_items(conn: sqlite3.Connection, current_rels: set[str]) -> int:
-    """Remove DB items no longer present on disk. Returns count removed."""
     rows = conn.execute("SELECT rel FROM items").fetchall()
     db_rels = {r["rel"] for r in rows}
 
@@ -205,19 +197,25 @@ def upsert_meta(conn: sqlite3.Connection, rel: str, meta: dict[str, Any]) -> Non
         "writer","publisher","summary","genre","tags","characters",
         "teams","locations","comicvineissue"
     ]
-    if _column_exists(conn, "meta", "format"):
+    has_format = any(
+        r[1].lower() == "format"
+        for r in conn.execute("PRAGMA table_info(meta)").fetchall()
+    )
+    if has_format:
         cols.append("format")
 
     vals = [meta.get(k) for k in cols]
+    col_csv = ",".join(cols)
+    qms = ",".join(["?"] * len(cols))
+    sets = ",".join(f"{k}=excluded.{k}" for k in cols)
 
-    exists = conn.execute("SELECT 1 FROM meta WHERE rel=?", (rel,)).fetchone() is not None
-    if exists:
-        sets = ",".join([f"{k}=?" for k in cols])
-        conn.execute(f"UPDATE meta SET {sets} WHERE rel=?", (*vals, rel))
-    else:
-        col_csv = ",".join(cols)
-        qms  = ",".join(["?"] * len(cols))
-        conn.execute(f"INSERT INTO meta(rel,{col_csv}) VALUES (?,{qms})", (rel, *vals))
+    conn.execute(
+        f"""
+        INSERT INTO meta(rel,{col_csv}) VALUES (?,{qms})
+        ON CONFLICT(rel) DO UPDATE SET {sets}
+        """,
+        (rel, *vals),
+    )
 
     if HAS_FTS5:
         it = conn.execute("SELECT name, is_dir FROM items WHERE rel=?", (rel,)).fetchone()
@@ -370,9 +368,6 @@ def _split_query(q: str) -> tuple[list[str], list[str]]:
     words  = [t for t in tokens if t not in years]
     return words, years
 
-def _like_term(s: str) -> str:
-    return f"%{s}%"
-
 def _search_where(q: str) -> tuple[str, list]:
     """Build WHERE clause and params for search queries."""
     words, years = _split_query(q)
@@ -394,7 +389,7 @@ def _search_where(q: str) -> tuple[str, list]:
               m.publisher LIKE ?
             )
             """)
-            like = _like_term(w)
+            like = f"%{w}%"
             params.extend([like, like, like, like, like])
 
     if years:
@@ -831,7 +826,6 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         """)
     ]
     out["top_publishers"] = top_pubs
-    out["publishers_breakdown"] = top_pubs
 
     timeline = [
         {"year": int(row[0]), "count": row[1]}
@@ -847,7 +841,6 @@ def stats(conn: sqlite3.Connection) -> dict[str, Any]:
         if row[0] is not None
     ]
     out["timeline_by_year"] = timeline
-    out["publication_timeline"] = timeline
 
     # formats breakdown (expects column present; unknowns grouped)
     rows = conn.execute("""

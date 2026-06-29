@@ -2,11 +2,6 @@ import os
 from pathlib import Path
 
 def _parse_bool(name: str, default: bool) -> bool:
-    """Parse a boolean from environment variable.
-
-    Accepts: "1", "true", "yes", "on" (case-insensitive) as True.
-    All other values are False. If variable is not set, use default.
-    """
     val = os.environ.get(name)
     if val is None:
         return default

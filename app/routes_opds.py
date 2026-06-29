@@ -73,7 +73,10 @@ def _resolve_item(item_id: int) -> tuple:
         conn.close()
     if not row:
         raise HTTPException(404, "Item not found")
+    lib_resolved = LIBRARY_DIR.resolve()
     p = (LIBRARY_DIR / row["rel"]).resolve()
+    if lib_resolved not in p.parents and p != lib_resolved:
+        raise HTTPException(403, "Access denied")
     if not p.exists() or not p.is_file():
         raise HTTPException(404, "File not found")
     return row, p

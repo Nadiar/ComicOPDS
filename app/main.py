@@ -87,26 +87,20 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    try:
-        ua = request.headers.get("user-agent", "-")
-        accept = request.headers.get("accept", "-")
-        app_logger.info(
-            f"--> {request.method} {request.url.path}"
-            f"{'?' + str(request.url.query) if request.url.query else ''}"
-            f"  UA={ua}  Accept={accept}"
-        )
-        app_logger.debug(f"    headers: {_mask_headers(dict(request.headers))}")
-    except Exception:
-        pass
+    ua = request.headers.get("user-agent", "-")
+    accept = request.headers.get("accept", "-")
+    app_logger.info(
+        f"--> {request.method} {request.url.path}"
+        f"{'?' + str(request.url.query) if request.url.query else ''}"
+        f"  UA={ua}  Accept={accept}"
+    )
+    app_logger.debug(f"    headers: {_mask_headers(dict(request.headers))}")
     resp = await call_next(request)
-    try:
-        ct = resp.headers.get("content-type", "-")
-        app_logger.info(
-            f"<-- {resp.status_code} {request.method} {request.url.path}"
-            f"  Content-Type={ct}"
-        )
-    except Exception:
-        pass
+    ct = resp.headers.get("content-type", "-")
+    app_logger.info(
+        f"<-- {resp.status_code} {request.method} {request.url.path}"
+        f"  Content-Type={ct}"
+    )
     return resp
 
 # -------------------- Small helpers --------------------
@@ -134,14 +128,6 @@ def _git_commit() -> str | None:
         return commit or None
     return None
 
-def _build_info() -> dict[str, Any]:
-    return {
-        "commit": _git_commit(),
-        "server_base": SERVER_BASE,
-        "url_prefix": URL_PREFIX,
-        "opds2_manifest_path": abs_url("/opds/v2/manifest"),
-    }
-
 def _health_payload() -> dict[str, Any]:
     try:
         conn = db.connect()
@@ -168,26 +154,17 @@ def startup():
         sqlite_version = conn.execute("select sqlite_version()").fetchone()[0]
     finally:
         conn.close()
-    app_logger.info(f"SQLite version: {sqlite_version}")
-    app_logger.info(f"SQLite FTS5: {'ENABLED' if db.has_fts5() else 'DISABLED'}")
-    build = _build_info()
-    app_logger.info(f"Build commit: {build['commit'] or 'unknown'}")
-    app_logger.info(f"OPDS 2 manifest path: {build['opds2_manifest_path']}")
-
-    app_logger.info("=== ComicOPDS Configuration ===")
-    app_logger.info(f"  Library dir: {LIBRARY_DIR}")
-    app_logger.info(f"  Server base: {SERVER_BASE}")
-    app_logger.info(f"  URL prefix: {URL_PREFIX or '(none)'}")
-    app_logger.info(f"  Page size: {PAGE_SIZE}")
-    app_logger.info(f"  Auth disabled: {auth.DISABLE_AUTH}")
-    app_logger.info(f"  Auto-index on start: {AUTO_INDEX_ON_START}")
-    app_logger.info(f"  Precache thumbs: {PRECACHE_THUMBS}")
-    app_logger.info(f"  Thumb workers: {THUMB_WORKERS}")
-    app_logger.info(f"  Watch enabled: {ENABLE_WATCH}")
-    app_logger.info(f"  Log level: {LOG_LEVEL}")
-    app_logger.info(f"  Auth logging (LOG_AUTH): {LOG_AUTH}")
-    app_logger.info(f"  Log file: /data/app.log (operational INFO+; request logs {'enabled' if LOG_AUTH else 'suppressed — set LOG_AUTH=true to enable'})")
-    app_logger.info("===============================")
+    app_logger.info(
+        "ComicOPDS starting: commit=%s sqlite=%s fts5=%s library=%s base=%s "
+        "prefix=%s page_size=%d auth_disabled=%s watch=%s log_level=%s log_auth=%s "
+        "opds2_manifest=%s",
+        _git_commit() or "unknown",
+        sqlite_version,
+        "ENABLED" if db.has_fts5() else "DISABLED",
+        LIBRARY_DIR, SERVER_BASE, URL_PREFIX or "(none)", PAGE_SIZE,
+        auth.DISABLE_AUTH, ENABLE_WATCH, LOG_LEVEL, LOG_AUTH,
+        abs_url("/opds/v2/manifest"),
+    )
 
     if ENABLE_WATCH:
         start_watcher()

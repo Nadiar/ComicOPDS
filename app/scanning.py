@@ -68,11 +68,7 @@ def set_status(**kw):
 
 
 def count_cbz(root: Path) -> int:
-    n = 0
-    for p in root.rglob("*"):
-        if p.is_file() and p.suffix.lower() == ".cbz":
-            n += 1
-    return n
+    return sum(1 for p in root.rglob("*.cbz") if p.is_file())
 
 
 def parent_rel(rel: str) -> str:
@@ -80,7 +76,6 @@ def parent_rel(rel: str) -> str:
 
 
 def read_comicinfo(cbz_path: Path) -> dict[str, Any]:
-    """Extract ComicInfo.xml metadata from a CBZ file."""
     meta: dict[str, Any] = {}
     try:
         with zipfile.ZipFile(cbz_path, "r") as zf:
@@ -385,7 +380,6 @@ def refresh_directory(dir_rel: str) -> bool:
 # -------------------- Filesystem watcher --------------------
 
 def _reindex_file(abs_path: Path):
-    """Re-read metadata for a single CBZ and update the DB. Called from watcher thread."""
     rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
     conn = db.connect()
     try:
@@ -399,7 +393,6 @@ def _reindex_file(abs_path: Path):
 
 
 def _delete_file(abs_path: Path):
-    """Remove a deleted CBZ from the DB. Called from watcher thread."""
     rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
     conn = db.connect()
     try:
@@ -484,7 +477,6 @@ def start_watcher():
 
 
 def index_single_file(conn, abs_path: Path) -> int:
-    """Index a single CBZ file into the database. Returns 1 on success, 0 on error."""
     rel = abs_path.relative_to(LIBRARY_DIR).as_posix()
     st = abs_path.stat()
     try:

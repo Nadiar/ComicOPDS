@@ -3,16 +3,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import warnings
 import zipfile
 from pathlib import Path
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image
 
 from .config import LIBRARY_DIR
 
 logger = logging.getLogger("comicopds")
-warnings.simplefilter("ignore", UserWarning)
 ERROR_LOG = Path("/data/thumbs_errors.log")
 
 THUMBS_DIR = Path("/data/thumbs")
@@ -21,21 +19,19 @@ THUMBS_DIR.mkdir(parents=True, exist_ok=True)
 def _thumb_name(rel: str, comicvine_issue: str | None) -> str:
     if comicvine_issue:
         safe = "".join(c for c in comicvine_issue if c.isalnum() or c in ("-", "_"))
-        if not safe:
-            safe = comicvine_issue
-        return f"{safe}.jpg"
+        if safe:
+            return f"{safe}.jpg"
     h = hashlib.sha256(rel.encode("utf-8")).hexdigest()
     return f"{h}.jpg"
 
-def _cover_candidate_names():
-    return (
-        "cover.jpg", "cover.jpeg", "cover.png", "000.jpg", "001.jpg", "0001.jpg", "1.jpg",
-        "front.jpg", "folder.jpg"
-    )
+_COVER_CANDIDATES = (
+    "cover.jpg", "cover.jpeg", "cover.png", "000.jpg", "001.jpg", "0001.jpg", "1.jpg",
+    "front.jpg", "folder.jpg"
+)
 
 def _choose_cover_name(names: list[str]) -> str:
     lower = {n.lower(): n for n in names}
-    for key in _cover_candidate_names():
+    for key in _COVER_CANDIDATES:
         if key in lower:
             return lower[key]
     def natkey(s: str):
@@ -70,7 +66,6 @@ def _save_as_jpeg(src_img: Image.Image, dest: Path) -> Path:
     return dest
 
 def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: str | None) -> Path | None:
-    """Generate and cache thumbnail from CBZ cover image. Returns path or None."""
     out = THUMBS_DIR / _thumb_name(rel, comicvine_issue)
 
     if out.exists():
@@ -90,25 +85,14 @@ def generate_thumb(rel: str, abs_cbz_path: Path, comicvine_issue: str | None) ->
             cover_name = _choose_cover_name(images)
             try:
                 with zf.open(cover_name) as fp:
-                    try:
-                        img = Image.open(fp)
-                        # Force decode to catch truncated/corrupt images early
-                        img.load()
-                    except UnidentifiedImageError as e:
-                        _log_thumb_error(rel, UnidentifiedImageError(f"Unidentified image: {cover_name}"))
-                        return None
-                    except Exception as e:
-                        _log_thumb_error(rel, e)
-                        return None
-
-                    try:
-                        return _save_as_jpeg(img, out)
-                    except Exception as e:
-                        _log_thumb_error(rel, e)
-                        return None
-
-            except KeyError:
+                    img = Image.open(fp)
+                    img.load()
+                return _save_as_jpeg(img, out)
+            except KeyError as e:
                 _log_thumb_error(rel, KeyError(f"Cover not found in zip: {cover_name}"))
+                return None
+            except Exception as e:
+                _log_thumb_error(rel, e)
                 return None
 
     except zipfile.BadZipFile as e:

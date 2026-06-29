@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, PlainTextResponse,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import auth, db
 from .auth import require_basic
@@ -39,12 +39,12 @@ LOG_PATH = Path("/data/app.log")
 # -------------------- Pydantic models --------------------
 
 class UserCreate(BaseModel):
-    username: str
-    password: str
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=8, max_length=72)
     is_admin: bool = False
 
 class UserUpdate(BaseModel):
-    password: str | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=72)
     is_admin: bool | None = None
 
 # -------------------- Dashboard --------------------
@@ -304,7 +304,8 @@ def get_logs(
             "file_size": file_size,
         })
     except OSError as e:
-        raise HTTPException(500, f"Could not read log: {e}")
+        logger.error("Could not read log file: %s", e)
+        raise HTTPException(500, "Could not read log file")
 
 @router.get("/admin/logs/download")
 def download_logs(admin: str = Depends(auth.require_admin)):
@@ -327,12 +328,14 @@ def clear_logs(
         if LOG_PATH.exists():
             LOG_PATH.write_text("", encoding="utf-8")
     except OSError as e:
-        raise HTTPException(500, f"Could not clear log: {e}")
+        logger.error("Could not clear log file: %s", e)
+        raise HTTPException(500, "Could not clear log file")
     return JSONResponse({"ok": True})
 
 # -------------------- Smart Lists (CRUD) --------------------
 
 SMARTLISTS_PATH = Path("/data/smartlists.json")
+_SMARTLISTS_MAX_BODY = 512 * 1024  # 512 KB
 
 
 def _slugify(name: str) -> str:
@@ -340,7 +343,6 @@ def _slugify(name: str) -> str:
 
 
 def _load_smartlists() -> list[dict]:
-    """Load smart lists from JSON, handling legacy formats (nested lists, dict wrappers)."""
     if not SMARTLISTS_PATH.exists():
         return []
     try:
@@ -354,15 +356,7 @@ def _load_smartlists() -> list[dict]:
     elif not isinstance(data, list):
         return []
 
-    flat: list[dict] = []
-    def _flatten(obj):
-        if isinstance(obj, list):
-            for item in obj:
-                _flatten(item)
-        elif isinstance(obj, dict):
-            flat.append(obj)
-    _flatten(data)
-    return flat
+    return [item for item in data if isinstance(item, dict)]
 
 
 def _save_smartlists(lists: list[dict]) -> None:
@@ -390,6 +384,8 @@ async def smartlists_post(
     raw = await request.body()
     if not raw:
         return JSONResponse({"ok": False, "error": "empty body"}, status_code=400)
+    if len(raw) > _SMARTLISTS_MAX_BODY:
+        return JSONResponse({"ok": False, "error": "body too large"}, status_code=413)
 
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -429,5 +425,12 @@ def debug_fts(_=Depends(auth.require_admin)):
 
 @router.get("/debug/build", response_class=JSONResponse)
 def debug_build(_=Depends(auth.require_admin)):
-    from .main import _build_info
-    return JSONResponse(_build_info())
+    from .main import _git_commit
+    from .feeds import abs_url
+    from .config import SERVER_BASE, URL_PREFIX
+    return JSONResponse({
+        "commit": _git_commit(),
+        "server_base": SERVER_BASE,
+        "url_prefix": URL_PREFIX,
+        "opds2_manifest_path": abs_url("/opds/v2/manifest"),
+    })

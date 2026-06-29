@@ -82,8 +82,8 @@ def get_real_client_ip(request: Request) -> str:
         # Trust the proxy headers
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
-            # X-Forwarded-For can be a comma separated list, the first is the real client
-            return forwarded_for.split(",")[0].strip()
+            # Take the rightmost entry — appended by the trusted proxy, not spoofable by client
+            return forwarded_for.split(",")[-1].strip()
 
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
@@ -122,13 +122,11 @@ def authenticate_user(credentials: HTTPBasicCredentials) -> dict | None:
     log.warning("auth failure: user=%s", credentials.username)
     return None
 
-def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
-    if DISABLE_AUTH:
-        return "anonymous"
-
+def _authenticate(request: Request, credentials: HTTPBasicCredentials) -> dict:
+    """Rate-limit check + credential verification. Returns user dict or raises."""
     client_ip = get_real_client_ip(request)
     ua = request.headers.get("User-Agent", "Unknown")
-    accept = request.headers.get("Accept") or "No mime type requested"
+    accept = request.headers.get("Accept", "-")
 
     if _is_rate_limited(client_ip):
         log.warning("login rate-limited: ip=%s ua=%s", client_ip, ua)
@@ -137,8 +135,7 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
     user = authenticate_user(credentials)
     if user:
         _clear_failures(client_ip)
-        log.info("login accepted: user=%s ip=%s ua=%s accept=%s", user["username"], client_ip, ua, accept)
-        return user["username"]
+        return user
 
     _record_failure(client_ip)
     log.warning("login rejected: user=%s ip=%s ua=%s accept=%s", credentials.username, client_ip, ua, accept)
@@ -148,29 +145,23 @@ def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(
         headers={"WWW-Authenticate": "Basic"},
     )
 
+def require_basic(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
+    if DISABLE_AUTH:
+        return "anonymous"
+    user = _authenticate(request, credentials)
+    log.info("login accepted: user=%s ip=%s", user["username"], get_real_client_ip(request))
+    return user["username"]
+
 def require_admin(request: Request, credentials: HTTPBasicCredentials = Depends(security)) -> str:
     if DISABLE_AUTH:
         return "anonymous"
-
-    client_ip = get_real_client_ip(request)
-    ua = request.headers.get("User-Agent", "Unknown")
-    accept = request.headers.get("Accept") or "No mime type requested"
-
-    if _is_rate_limited(client_ip):
-        log.warning("admin login rate-limited: ip=%s ua=%s", client_ip, ua)
-        raise HTTPException(status_code=429, detail="Too many failed login attempts")
-
-    user = authenticate_user(credentials)
-    if user and user["is_admin"]:
-        _clear_failures(client_ip)
-        log.info("admin access accepted: user=%s ip=%s ua=%s accept=%s", user["username"], client_ip, ua, accept)
-        return user["username"]
-
-    if not user:
-        _record_failure(client_ip)
-    log.warning("admin access rejected: user=%s ip=%s ua=%s accept=%s", credentials.username, client_ip, ua, accept)
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Incorrect username, password, or insufficient permissions",
-        headers={"WWW-Authenticate": "Basic"},
-    )
+    user = _authenticate(request, credentials)
+    if not user["is_admin"]:
+        log.warning("admin access denied (not admin): user=%s", user["username"])
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username, password, or insufficient permissions",
+            headers={"WWW-Authenticate": "Basic"},
+        )
+    log.info("admin access accepted: user=%s ip=%s", user["username"], get_real_client_ip(request))
+    return user["username"]
